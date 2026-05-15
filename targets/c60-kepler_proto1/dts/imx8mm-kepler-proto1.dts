@@ -1277,7 +1277,7 @@
 
 	chosen {
 		bootargs = "console=ttymxc1,115200 earlycon=ec_imx6q,0x30890000,115200";
-		stdout-patch = "/serial@30890000";
+		stdout-path = "/serial@30890000";
 	};
 
 	regulator-usdhc2 {
