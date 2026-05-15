@@ -38,14 +38,12 @@ echo "[2/5] inject C60 DTB"
 DTB_SRC="$TARGET_DIR/dts/imx8mm-kepler-proto1.dtb"
 [ -f "$DTB_SRC" ] || { echo "missing $DTB_SRC"; exit 1; }
 
-echo "[3/5] build u-boot (imx8mm_evk_defconfig skeleton)"
+echo "[3/5] build u-boot (polycom_kepler_proto1_defconfig skeleton)"
 make -C "$UB" -s mrproper
-make -C "$UB" -s imx8mm_evk_defconfig
+make -C "$UB" -s polycom_kepler_proto1_defconfig
 make -C "$UB" -s -j$(nproc) >/dev/null
 # overwrite the DTB the EVK build produced with the C60 stock DTB
-cp "$DTB_SRC" "$UB/arch/arm/dts/imx8mm-evk.dtb"
 # rebuild only u-boot.dtb/u-boot-nodtb.bin links — touch only what's needed
-make -C "$UB" -s u-boot.dtb 2>&1 | tail -3
 echo "[3.5/5] verify dtb in tree matches"
 md5sum "$DTB_SRC" "$UB/arch/arm/dts/imx8mm-evk.dtb"
 
@@ -57,7 +55,7 @@ echo "[5/5] pack via imx-mkimage → flash.bin"
 MKD="$MK/iMX8M"
 cp "$UB/spl/u-boot-spl.bin" "$MKD/"
 cp "$UB/u-boot-nodtb.bin"    "$MKD/"
-cp "$DTB_SRC"                "$MKD/imx8mm-evk.dtb"
+cp "$UB/arch/arm/dts/imx8mm-polycom-kepler-proto1.dtb" "$MKD/imx8mm-evk.dtb"
 cp "$UB/u-boot.bin"          "$MKD/"
 cp "$UB/tools/mkimage"       "$MKD/mkimage_uboot"
 cp "$ATF/build/imx8mm/release/bl31.bin" "$MKD/"
