@@ -1,0 +1,8 @@
+out/
+vendored/uboot-imx/
+vendored/arm-trusted-firmware/
+vendored/imx-mkimage/
+*.bin
+*.itb
+*.o
+*.elf
