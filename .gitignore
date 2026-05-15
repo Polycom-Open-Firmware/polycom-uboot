@@ -6,3 +6,6 @@ vendored/imx-mkimage/
 *.itb
 *.o
 *.elf
+vendored/
+out/
+mkimage_imx8
