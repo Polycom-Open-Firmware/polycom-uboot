@@ -152,7 +152,7 @@
 		#address-cells = <0x01>;
 		#size-cells = <0x00>;
 
-		clock@0 {
+		osc_32k {
 			compatible = "fixed-clock";
 			reg = <0x00>;
 			#clock-cells = <0x00>;
@@ -161,7 +161,7 @@
 			phandle = <0x0c>;
 		};
 
-		clock@1 {
+		osc_24m {
 			compatible = "fixed-clock";
 			reg = <0x01>;
 			#clock-cells = <0x00>;
@@ -170,7 +170,7 @@
 			phandle = <0x0d>;
 		};
 
-		clock@2 {
+		clk_ext1 {
 			compatible = "fixed-clock";
 			reg = <0x03>;
 			#clock-cells = <0x00>;
@@ -179,7 +179,7 @@
 			phandle = <0x0e>;
 		};
 
-		clock@3 {
+		clk_ext2 {
 			compatible = "fixed-clock";
 			reg = <0x04>;
 			#clock-cells = <0x00>;
@@ -188,7 +188,7 @@
 			phandle = <0x0f>;
 		};
 
-		clock@4 {
+		clk_ext3 {
 			compatible = "fixed-clock";
 			reg = <0x05>;
 			#clock-cells = <0x00>;
@@ -197,7 +197,7 @@
 			phandle = <0x10>;
 		};
 
-		clock@5 {
+		clk_ext4 {
 			compatible = "fixed-clock";
 			reg = <0x06>;
 			#clock-cells = <0x00>;
