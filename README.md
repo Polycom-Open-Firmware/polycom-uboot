@@ -1,4 +1,4 @@
-# c60-uboot
+# polycom-uboot
 
 Mainline u-boot for the Polycom Trio C60 (i.MX 8M Mini Quad, codename
 `kepler_proto1`).
@@ -39,5 +39,5 @@ point. Builds but untested on hardware.
 ## Why a fresh repo
 
 `c60-firmware-build` is the kernel/rootfs/boot.img pipeline.
-`c60-uboot` is the bootloader pipeline. Different toolchains, different
+`polycom-uboot` is the bootloader pipeline. Different toolchains, different
 upstream, different scaling — kept separate.
