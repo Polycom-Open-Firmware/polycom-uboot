@@ -47,9 +47,14 @@ make -C "$UB" -s -j$(nproc) >/dev/null
 echo "[3.5/5] verify dtb in tree matches"
 md5sum "$DTB_SRC" "$UB/arch/arm/dts/imx8mm-evk.dtb"
 
-echo "[4/5] build ATF bl31.bin for imx8mm"
-make -C "$ATF" -s PLAT=imx8mm bl31 -j$(nproc) >/dev/null
-cp "$ATF/build/imx8mm/release/bl31.bin" "$OUT/bl31.bin"
+if [ -n "${BL31_OVERRIDE:-}" ] && [ -f "$TARGET_DIR/$BL31_OVERRIDE" ]; then
+	echo "[4/5] using stock BL31 override: $BL31_OVERRIDE"
+	cp "$TARGET_DIR/$BL31_OVERRIDE" "$OUT/bl31.bin"
+else
+	echo "[4/5] build ATF bl31.bin for imx8mm"
+	make -C "$ATF" -s PLAT=imx8mm bl31 -j$(nproc) >/dev/null
+	cp "$ATF/build/imx8mm/release/bl31.bin" "$OUT/bl31.bin"
+fi
 
 echo "[5/5] pack via imx-mkimage → flash.bin"
 MKD="$MK/iMX8M"
@@ -58,7 +63,7 @@ cp "$UB/u-boot-nodtb.bin"    "$MKD/"
 cp "$UB/arch/arm/dts/imx8mm-polycom-kepler-proto1.dtb" "$MKD/imx8mm-evk.dtb"
 cp "$UB/u-boot.bin"          "$MKD/"
 cp "$UB/tools/mkimage"       "$MKD/mkimage_uboot"
-cp "$ATF/build/imx8mm/release/bl31.bin" "$MKD/"
+cp "$OUT/bl31.bin" "$MKD/bl31.bin"
 cp "$FW_DIR/ddr/synopsys/lpddr4_pmu_train_1d_imem.bin" "$MKD/"
 cp "$FW_DIR/ddr/synopsys/lpddr4_pmu_train_1d_dmem.bin" "$MKD/"
 cp "$FW_DIR/ddr/synopsys/lpddr4_pmu_train_2d_imem.bin" "$MKD/"
