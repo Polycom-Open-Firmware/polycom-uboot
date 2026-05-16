@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# One command: C60 (SDP) -> our kernel+Debian (slot a) or stock (slot b).
+set -e
+SLOT="${1:-a}"; FB="/tmp/flash.bin"
+[ -f "$FB" ] || { echo "missing $FB"; exit 1; }
+echo "[c60-boot] waiting for SDP..."; until lsusb | grep -q "1fc9:0134"; do sleep 1; done
+echo "[c60-boot] uuu loading our u-boot..."; uuu -b spl "$FB" >/dev/null 2>&1 &
+sleep 3
+echo "[c60-boot] driving slot $SLOT boot over UART..."
+python3 /usr/local/sbin/c60_boot_seq.py "$SLOT"
+echo "[c60-boot] done; console on /tmp/uart_persist.cap"

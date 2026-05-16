@@ -38,6 +38,22 @@ echo "[2/5] inject C60 DTB"
 DTB_SRC="$TARGET_DIR/dts/imx8mm-kepler-proto1.dtb"
 [ -f "$DTB_SRC" ] || { echo "missing $DTB_SRC"; exit 1; }
 
+echo "[3.0/5] apply C60 u-boot overlay (tracked patches; vendored/ is gitignored)"
+OVERLAY="$TARGET_DIR/uboot-overlay"
+if [ -d "$OVERLAY" ]; then
+	# Copy tracked source patches over the freshly-cloned vendored tree so
+	# the build is reproducible from a clean scripts/setup.sh. Covers:
+	# defconfig (Android/AVB/BCB/fastboot/MMC_DEV), C60 DTS (usbg1 DM gadget
+	# node + dr_mode=peripheral), A53 clock fix, BUCK2/REGLOCK, TCPC bypass,
+	# fastboot_dev/target_ubootdev env.
+	( cd "$OVERLAY" && find . -type f -print0 | \
+	  while IFS= read -r -d '' f; do
+	    mkdir -p "$UB/$(dirname "$f")"
+	    cp "$f" "$UB/$f"
+	  done )
+	echo "      overlay applied ($(find "$OVERLAY" -type f | wc -l) files)"
+fi
+
 echo "[3/5] build u-boot (polycom_kepler_proto1_defconfig skeleton)"
 make -C "$UB" -s mrproper
 make -C "$UB" -s polycom_kepler_proto1_defconfig
