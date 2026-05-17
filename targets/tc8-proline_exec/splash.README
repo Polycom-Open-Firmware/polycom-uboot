@@ -1,0 +1,7 @@
+splash.bmp — TC8 u-boot boot splash (F2).
+Source: vinceliuice/Colloid-icon-theme  src/places/24/start-here.svg
+Render: convert -density 400 start-here.svg -resize 360x360 -extent 360x360 -flatten -type truecolor BMP3
+Format: 360x360 24bpp uncompressed BMP3 (u-boot CONFIG_BMP_24BPP).
+Display: env splashpos=m,m (centered), splashimage=0x50000000 (NXP imx convention).
+Storage wiring (load bmp -> 0x50000000 before video init) is finalized at
+on-device #8 — panel does not illuminate until DSIM PMS lock is proven.

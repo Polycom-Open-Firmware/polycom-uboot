@@ -34,9 +34,9 @@ EVK="$UB/board/freescale/imx8mm_evk"
 [ -f "$EVK/lpddr4_timing.c.orig" ] || cp "$EVK/lpddr4_timing.c" "$EVK/lpddr4_timing.c.orig"
 cp "$TARGET_DIR/board/lpddr4_timing.c" "$EVK/lpddr4_timing.c"
 
-echo "[2/5] inject C60 DTB"
-DTB_SRC="$TARGET_DIR/dts/imx8mm-kepler-proto1.dtb"
-[ -f "$DTB_SRC" ] || { echo "missing $DTB_SRC"; exit 1; }
+echo "[2/5] locate optional stock-reference DTB (md5 sanity only)"
+DTB_SRC="$(ls "$TARGET_DIR"/dts/*.dtb 2>/dev/null | head -1 || true)"
+[ -n "$DTB_SRC" ] && echo "      ref: $DTB_SRC" || echo "      none — dtb md5 sanity will be skipped"
 
 echo "[3.0/5] apply C60 u-boot overlay (tracked patches; vendored/ is gitignored)"
 OVERLAY="$TARGET_DIR/uboot-overlay"
@@ -54,14 +54,16 @@ if [ -d "$OVERLAY" ]; then
 	echo "      overlay applied ($(find "$OVERLAY" -type f | wc -l) files)"
 fi
 
-echo "[3/5] build u-boot (polycom_kepler_proto1_defconfig skeleton)"
+echo "[3/5] build u-boot ($DEFCONFIG)"
 make -C "$UB" -s mrproper
-make -C "$UB" -s polycom_kepler_proto1_defconfig
+make -C "$UB" -s "$DEFCONFIG"
 make -C "$UB" -s -j$(nproc) >/dev/null
-# overwrite the DTB the EVK build produced with the C60 stock DTB
-# rebuild only u-boot.dtb/u-boot-nodtb.bin links — touch only what's needed
-echo "[3.5/5] verify dtb in tree matches"
-md5sum "$DTB_SRC" "$UB/arch/arm/dts/imx8mm-evk.dtb"
+if [ -n "$DTB_SRC" ] && [ -f "$DTB_SRC" ]; then
+	echo "[3.5/5] dtb md5 sanity ($(basename "$DTB_SRC") vs built imx8mm-evk.dtb)"
+	md5sum "$DTB_SRC" "$UB/arch/arm/dts/imx8mm-evk.dtb" || true
+else
+	echo "[3.5/5] no stock-ref dtb in target — md5 sanity skipped"
+fi
 
 if [ -n "${BL31_OVERRIDE:-}" ] && [ -f "$TARGET_DIR/$BL31_OVERRIDE" ]; then
 	echo "[4/5] using stock BL31 override: $BL31_OVERRIDE"
@@ -76,7 +78,7 @@ echo "[5/5] pack via imx-mkimage → flash.bin"
 MKD="$MK/iMX8M"
 cp "$UB/spl/u-boot-spl.bin" "$MKD/"
 cp "$UB/u-boot-nodtb.bin"    "$MKD/"
-cp "$UB/arch/arm/dts/imx8mm-polycom-kepler-proto1.dtb" "$MKD/imx8mm-evk.dtb"
+cp "$UB/arch/arm/dts/${DTS}.dtb" "$MKD/imx8mm-evk.dtb"
 cp "$UB/u-boot.bin"          "$MKD/"
 cp "$UB/tools/mkimage"       "$MKD/mkimage_uboot"
 cp "$OUT/bl31.bin" "$MKD/bl31.bin"

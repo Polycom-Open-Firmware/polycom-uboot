@@ -1,0 +1,4 @@
+# Render scratch + vendored third-party icon theme (huge, regenerable).
+# The deliverables are bmp_blob.bin + the per-mode *.bmp + render script.
+work/
+orig_unrotated/

@@ -1,0 +1,414 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Polycom TC8 (codename proline_exec / LCC PROTO) — u-boot minimal DTS
+ *
+ * Derived from the proven C60 (kepler_proto1) minimal u-boot DTS. Per the
+ * stock TC8 DTB (re/firmware/_archive_pre_release/lcc.dtb, decompiled
+ * 2026-05-16, model "Polycom TC8 (LCC PROTO)") TC8 mirrors C60:
+ *   - 2 GiB LPDDR4 (shared timing table; symlinked board/lpddr4_timing.c)
+ *   - PMIC: Rohm BD71837 @ i2c1 0x4b   (stock: i2c@30a20000 pmic@4b)
+ *   - usdhc3 (eMMC), non-removable     (stock: mmc@30b60000)
+ *   - uart2 console                    (stock stdout = serial@30890000)
+ *
+ * TC8-specific add vs. the C60 minimal DTS:
+ *   - i2c2 + Goodix GT9271 touchscreen @ 0x5d (stock: i2c@30a30000
+ *     touchscreen@5d "goodix,gt9271", IRQ GPIO1_IO9, size 800x1280).
+ *     F1 (gesture boot-selector) polls the GT9271 status register over
+ *     I2C2 — no IRQ/reset GPIO wired here on purpose (stock node has no
+ *     reset-gpios; polling avoids the GPIO1_IO9 shared-IRQ with adv7535).
+ *     Address quirk: 0x5d default, 0x14 if INT held at reset — handled
+ *     in the F1 reader, not here. See ../../../../UNLOCK_SPEC.md §7a.
+ *
+ * Panel / DSI / backlight are intentionally absent (F2 splash is staged
+ * after the panel pipeline is proven — UNLOCK_SPEC.md §5). This DTS only
+ * has what u-boot needs to: enumerate eMMC, talk to UART2, reach
+ * fastboot/SDP, and probe the touch controller for the boot selector.
+ */
+
+/dts-v1/;
+
+#include <dt-bindings/usb/pd.h>
+#include <dt-bindings/gpio/gpio.h>
+#include "imx8mm.dtsi"
+
+/ {
+	model = "Polycom TC8 (proline_exec / LCC PROTO)";
+	compatible = "poly,tc8", "fsl,imx8mm";
+
+	chosen {
+		stdout-path = &uart2;
+	};
+
+	memory@40000000 {
+		device_type = "memory";
+		reg = <0x0 0x40000000 0 0x80000000>;
+	};
+
+	aliases {
+		mmc0 = &usdhc3;        /* eMMC */
+		serial0 = &uart2;      /* console */
+		usbgadget0 = &usbg1;
+	};
+
+	/*
+	 * DM USB-gadget binding node. ci-udc-otg (UCLASS_USB_GADGET_GENERIC)
+	 * only binds to "fsl,imx27-usb-gadget" with a chipidea,usb phandle.
+	 * NXP supply this via imx8mm-evk-u-boot.dtsi; our standalone DTS has
+	 * no matching -u-boot.dtsi, so without this node fastboot/ums fail
+	 * with "No USB device found / USB init failed: -19". This single node
+	 * makes the gadget controller enumerate (proven on C60).
+	 */
+	usbg1: usbg1 {
+		compatible = "fsl,imx27-usb-gadget";
+		dr_mode = "peripheral";
+		chipidea,usb = <&usbotg1>;
+		status = "okay";
+	};
+};
+
+&i2c1 {
+	clock-frequency = <100000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_i2c1>;
+	status = "okay";
+
+	pmic@4b {
+		compatible = "rohm,bd71837";
+		reg = <0x4b>;
+		/* SPL hits this via the legacy power_bd71837_init() path; child
+		 * regulators need not be enumerated for boot-time use. */
+	};
+};
+
+&i2c2 {
+	clock-frequency = <100000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_i2c2>;
+	status = "okay";
+
+	/*
+	 * Goodix GT9271 multitouch — F1 boot-selector reads finger count
+	 * from status reg 0x814E over I2C2. reg=0x5d is the GT9 reset
+	 * default; the device may answer at 0x14 if INT was held at reset
+	 * (the F1 reader tries 0x5d then 0x14). No irq/reset GPIO wired:
+	 * F1 polls, it does not use the IRQ.
+	 */
+	touchscreen@5d {
+		compatible = "goodix,gt9271";
+		reg = <0x5d>;
+		touchscreen-size-x = <800>;
+		touchscreen-size-y = <1280>;
+		status = "okay";
+	};
+};
+
+&uart2 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_uart2>;
+	status = "okay";
+};
+
+&usdhc3 {
+	assigned-clocks = <&clk IMX8MM_CLK_USDHC3_ROOT>;
+	assigned-clock-rates = <400000000>;
+	pinctrl-names = "default", "state_100mhz", "state_200mhz";
+	pinctrl-0 = <&pinctrl_usdhc3>;
+	pinctrl-1 = <&pinctrl_usdhc3_100mhz>;
+	pinctrl-2 = <&pinctrl_usdhc3_200mhz>;
+	bus-width = <8>;
+	non-removable;
+	status = "okay";
+};
+
+&usbotg1 {
+	/*
+	 * Force peripheral mode (no TCPC on this board — same as C60).
+	 * With "otg" the ehci-mx6 driver never registers a
+	 * UCLASS_USB_GADGET_GENERIC device and fastboot/ums fail with -19.
+	 */
+	dr_mode = "peripheral";
+	srp-disable;
+	hnp-disable;
+	adp-disable;
+	power-active-high;
+	disable-over-current;
+	status = "okay";
+};
+
+&iomuxc {
+	pinctrl_i2c1: i2c1grp {
+		fsl,pins = <
+			MX8MM_IOMUXC_I2C1_SCL_I2C1_SCL                  0x400001c3
+			MX8MM_IOMUXC_I2C1_SDA_I2C1_SDA                  0x400001c3
+		>;
+	};
+
+	pinctrl_i2c2: i2c2grp {
+		fsl,pins = <
+			MX8MM_IOMUXC_I2C2_SCL_I2C2_SCL                  0x400001c3
+			MX8MM_IOMUXC_I2C2_SDA_I2C2_SDA                  0x400001c3
+		>;
+	};
+
+	pinctrl_uart2: uart2grp {
+		fsl,pins = <
+			MX8MM_IOMUXC_UART2_RXD_UART2_DCE_RX             0x140
+			MX8MM_IOMUXC_UART2_TXD_UART2_DCE_TX             0x140
+		>;
+	};
+
+	/* Same byte values as EVK — i.MX8MM USDHC3 pads are SoC-fixed */
+	pinctrl_usdhc3: usdhc3grp {
+		fsl,pins = <
+			MX8MM_IOMUXC_NAND_WE_B_USDHC3_CLK               0x190
+			MX8MM_IOMUXC_NAND_WP_B_USDHC3_CMD               0x1d0
+			MX8MM_IOMUXC_NAND_DATA04_USDHC3_DATA0           0x1d0
+			MX8MM_IOMUXC_NAND_DATA05_USDHC3_DATA1           0x1d0
+			MX8MM_IOMUXC_NAND_DATA06_USDHC3_DATA2           0x1d0
+			MX8MM_IOMUXC_NAND_DATA07_USDHC3_DATA3           0x1d0
+			MX8MM_IOMUXC_NAND_RE_B_USDHC3_DATA4             0x1d0
+			MX8MM_IOMUXC_NAND_CE2_B_USDHC3_DATA5            0x1d0
+			MX8MM_IOMUXC_NAND_CE3_B_USDHC3_DATA6            0x1d0
+			MX8MM_IOMUXC_NAND_CLE_USDHC3_DATA7              0x1d0
+			MX8MM_IOMUXC_NAND_CE1_B_USDHC3_STROBE           0x190
+		>;
+	};
+	pinctrl_usdhc3_100mhz: usdhc3-100mhzgrp {
+		fsl,pins = <
+			MX8MM_IOMUXC_NAND_WE_B_USDHC3_CLK               0x194
+			MX8MM_IOMUXC_NAND_WP_B_USDHC3_CMD               0x1d4
+			MX8MM_IOMUXC_NAND_DATA04_USDHC3_DATA0           0x1d4
+			MX8MM_IOMUXC_NAND_DATA05_USDHC3_DATA1           0x1d4
+			MX8MM_IOMUXC_NAND_DATA06_USDHC3_DATA2           0x1d4
+			MX8MM_IOMUXC_NAND_DATA07_USDHC3_DATA3           0x1d4
+			MX8MM_IOMUXC_NAND_RE_B_USDHC3_DATA4             0x1d4
+			MX8MM_IOMUXC_NAND_CE2_B_USDHC3_DATA5            0x1d4
+			MX8MM_IOMUXC_NAND_CE3_B_USDHC3_DATA6            0x1d4
+			MX8MM_IOMUXC_NAND_CLE_USDHC3_DATA7              0x1d4
+			MX8MM_IOMUXC_NAND_CE1_B_USDHC3_STROBE           0x194
+		>;
+	};
+	pinctrl_usdhc3_200mhz: usdhc3-200mhzgrp {
+		fsl,pins = <
+			MX8MM_IOMUXC_NAND_WE_B_USDHC3_CLK               0x196
+			MX8MM_IOMUXC_NAND_WP_B_USDHC3_CMD               0x1d6
+			MX8MM_IOMUXC_NAND_DATA04_USDHC3_DATA0           0x1d6
+			MX8MM_IOMUXC_NAND_DATA05_USDHC3_DATA1           0x1d6
+			MX8MM_IOMUXC_NAND_DATA06_USDHC3_DATA2           0x1d6
+			MX8MM_IOMUXC_NAND_DATA07_USDHC3_DATA3           0x1d6
+			MX8MM_IOMUXC_NAND_RE_B_USDHC3_DATA4             0x1d6
+			MX8MM_IOMUXC_NAND_CE2_B_USDHC3_DATA5            0x1d6
+			MX8MM_IOMUXC_NAND_CE3_B_USDHC3_DATA6            0x1d6
+			MX8MM_IOMUXC_NAND_CLE_USDHC3_DATA7              0x1d6
+			MX8MM_IOMUXC_NAND_CE1_B_USDHC3_STROBE           0x196
+		>;
+	};
+};
+
+/*
+ * --- F2: panel + backlight (poly,lcc-proto) -------------------------------
+ * Stock TC8 lcc.dtb: LCDIF (594/500/200 MHz == imx8mm.dtsi base) ->
+ * fsl,imx8mm-mipi-dsim -> panel "poly,lcc-proto" (4-lane, reset GPIO2_IO5
+ * active-low) -> PWM4 backlight (period 25000 ns, default 250/255). The
+ * base imx8mm.dtsi already carries the lcdif<->dsi endpoint graph; here we
+ * enable it and retarget the DSI host compatible to the u-boot sec-dsi
+ * host driver ("samsung,sec-mipi-dsi", drivers/video/nxp/imx/
+ * sec_mipi_dsim.c). Panel driver = the LCC variant added to
+ * raydium-rm67191.c (deterministic RE'd MCS + stock 800x1280/76.5564MHz).
+ * On-device (#8): DSIM PMS lock at that pixclk + the two PROVISIONAL
+ * pinmux pads below must be confirmed vs stock backlightgrp.
+ */
+/ {
+	backlight: backlight {
+		compatible = "pwm-backlight";
+		pwms = <&pwm4 0 25000 0>;          /* stock period 0x61a8 = 25000 ns */
+		brightness-levels = <0 255>;
+		num-interpolated-steps = <255>;
+		default-brightness-level = <250>;  /* stock 0xfa */
+	};
+
+	/*
+	 * Panel must be a TOP-LEVEL node (NOT a &mipi_dsi child w/ reg=<0>):
+	 * u-boot video_link (video_link.c video_link_add_node) only chains a
+	 * remote it can resolve via find_device_by_ofnode() to a DM-bound
+	 * udevice. Top-level nodes are DM-bound during the normal DT scan;
+	 * a DSI-host child is not, so it never enters the chain and
+	 * rm67191 .get_display_timing is never called. This mirrors NXP's
+	 * vendored imx8mm-evk.dtsi `rm67199_panel` structure exactly (the
+	 * proven shape for this u-boot's sec_mipi_dsim + video_link).
+	 */
+	lcc_panel: lcc-panel {
+		compatible = "poly,lcc-proto";
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_disp_reset>;
+		/* rm67191 u-boot driver requests "reset-gpio" (singular) */
+		reset-gpio = <&gpio2 5 GPIO_ACTIVE_LOW>;
+		dsi-lanes = <4>;
+		video-mode = <0>;                  /* 0 = burst (stock: video/burst+HSE) */
+		backlight = <&backlight>;
+		status = "okay";
+
+		port {
+			lcc_from_dsim: endpoint {
+				remote-endpoint = <&dsim_to_lcc>;
+			};
+		};
+	};
+
+	/*
+	 * UCLASS_DSI_HOST back-end (sec_mipi_dsim, compatible
+	 * "samsung,sec-mipi-dsi"). imx_sec_dsim (the VIDEO_BRIDGE bound to
+	 * &mipi_dsi) grabs this via uclass_get_device(UCLASS_DSI_HOST, 0).
+	 * Must be a SEPARATE top-level node, not the &mipi_dsi compatible.
+	 * Verbatim from NXP vendored imx8mm-evk.dtsi dsi_host.
+	 */
+	dsi_host: dsi-host {
+		compatible = "samsung,sec-mipi-dsi";
+		status = "okay";
+	};
+};
+
+/*
+ * u-boot drivers/video/mxsfb.c mxs_of_get_timings() REQUIRES the lcdif
+ * node to carry `display = <&phandle>` -> a node with `bits-per-pixel`,
+ * else it errors "required display property isn't provided" and the
+ * video uclass never probes (vtest -> "no video device"). Mirror NXP's
+ * own u-boot reference (vendored imx8mm-evk.dtsi &lcdif/display0). The
+ * display-timings here are the deterministic RE'd stock lcc-proto values
+ * (raydium-rm67191.c lcc_proto_timing) so mxsfb's fallback
+ * ofnode_decode_display_timing() gets correct timings even if the
+ * video_link panel walk does not resolve.
+ */
+&lcdif {
+	display = <&display0>;
+	status = "okay";
+
+	display0: display@0 {
+		bits-per-pixel = <24>;
+		bus-width = <24>;
+
+		display-timings {
+			native-mode = <&timing_lcc>;
+			timing_lcc: timing-lcc {
+				clock-frequency = <76556400>;
+				hactive = <800>;
+				vactive = <1280>;
+				hfront-porch = <81>;
+				hback-porch = <81>;
+				hsync-len = <12>;
+				vfront-porch = <8>;
+				vback-porch = <18>;
+				vsync-len = <4>;
+				hsync-active = <0>;   /* NHSYNC */
+				vsync-active = <0>;   /* NVSYNC */
+				de-active = <0>;      /* DE_LOW */
+				pixelclk-active = <1>;
+			};
+		};
+	};
+};
+
+&mipi_dsi {
+	/*
+	 * Keep base imx8mm.dtsi compatible "fsl,imx8mm-mipi-dsim" — it binds
+	 * the u-boot UCLASS_VIDEO_BRIDGE driver `imx_sec_dsim`
+	 * (drivers/video/nxp/imx/sec_dsim_imx.c), which is the device mxsfb
+	 * actually drives: video_bridge_attach() -> imx_sec_dsim_attach()
+	 * (grabs the panel + UCLASS_DSI_HOST back-end + timings) and
+	 * video_bridge_set_backlight() -> panel_enable_backlight() +
+	 * dsi_host_enable(). Overriding to "samsung,sec-mipi-dsi" binds the
+	 * UCLASS_DSI_HOST back-end DIRECTLY as this node, which mxsfb does
+	 * NOT handle -> no bridge/backlight/panel enable -> dark panel.
+	 * The DSI_HOST back-end is the separate top-level `dsi-host` node
+	 * (added in / {}). This mirrors NXP imx8mm-evk.dtsi exactly.
+	 *
+	 * base also wires port@0 (input from lcdif). Add the output port
+	 * toward the top-level lcc_panel so video_link traverses
+	 * lcdif -> imx_sec_dsim -> panel.
+	 */
+	status = "okay";
+
+	port@1 {
+		dsim_to_lcc: endpoint {
+			remote-endpoint = <&lcc_from_dsim>;
+		};
+	};
+};
+
+&pwm4 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_pwm4>;
+	status = "okay";
+};
+
+&iomuxc {
+	/*
+	 * pwm4: DETERMINISTIC — stock lcc.dtb pwm4grp <0x64 0x2cc..0x05..0x10>
+	 *   = GPIO1_IO15 ALT5 PWM4_OUT, pad-conf 0x10; pwm4 == pwm@30690000
+	 *   (the stock backlight `pwms` target). Not guessed.
+	 * disp_reset: PROVISIONAL — stock has no explicit disp-reset group;
+	 *   GPIO2_IO5 == SD1_DATA3 pad (ALT5). Confirm drive strength at #8.
+	 */
+	pinctrl_disp_reset: dispresetgrp {
+		fsl,pins = <
+			MX8MM_IOMUXC_SD1_DATA3_GPIO2_IO5            0x19
+		>;
+	};
+	pinctrl_pwm4: pwm4grp {
+		fsl,pins = <
+			MX8MM_IOMUXC_GPIO1_IO15_PWM4_OUT            0x10
+		>;
+	};
+};
+
+/*
+ * F3 networking (G1): bring FEC up as a FIXED-LINK 1G/full RGMII MAC.
+ *
+ * TC8 wires the i.MX8MM FEC (ENET1) via RGMII to an RTL8363NB-VB L2
+ * switch (chip-id 0x1cc943, MDIO addr 0x1d). The switch is STATEFUL
+ * external silicon: stock signed u-boot 2018.03 fully initialises it
+ * (jam-table + 8051 fw + transparent-forwarding mode — "Switch:
+ * RTL8363NB-VB(0x1cc943)") and then chainloads us via `go`, which does
+ * NOT reset that chip. So our stage-2 INHERITS a fully-configured
+ * transparent switch; from the FEC's side it is just a fixed 1G/full
+ * RGMII link and the chip forwards CPU<->wire in HW. We therefore need
+ * NO RTL8363 driver, NO MDIO/switch node, and CRUCIALLY must NOT drive
+ * the eth-reset GPIO (GPIO5_IO02) — pulsing it would wipe stock's init
+ * and we carry no replacement init in stage-2. pinctrl_fec1 = the
+ * standard i.MX8MM RGMII pad group (EVK-template, SoC-portable),
+ * MINUS any reset pad. Deterministic bet: switch state persists across
+ * the warm `go` handoff. Verified by `dhcp`+`ping` at the prompt.
+ */
+&fec1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_fec1>;
+	phy-mode = "rgmii-id";
+	phy-handle = <&fec_fixed_link>;
+	status = "okay";
+
+	fec_fixed_link: fixed-link {
+		speed = <1000>;
+		full-duplex;
+	};
+};
+
+&iomuxc {
+	pinctrl_fec1: fec1grp {
+		fsl,pins = <
+			MX8MM_IOMUXC_ENET_MDC_ENET1_MDC			0x3
+			MX8MM_IOMUXC_ENET_MDIO_ENET1_MDIO		0x3
+			MX8MM_IOMUXC_ENET_TD3_ENET1_RGMII_TD3		0x1f
+			MX8MM_IOMUXC_ENET_TD2_ENET1_RGMII_TD2		0x1f
+			MX8MM_IOMUXC_ENET_TD1_ENET1_RGMII_TD1		0x1f
+			MX8MM_IOMUXC_ENET_TD0_ENET1_RGMII_TD0		0x1f
+			MX8MM_IOMUXC_ENET_RD3_ENET1_RGMII_RD3		0x91
+			MX8MM_IOMUXC_ENET_RD2_ENET1_RGMII_RD2		0x91
+			MX8MM_IOMUXC_ENET_RD1_ENET1_RGMII_RD1		0x91
+			MX8MM_IOMUXC_ENET_RD0_ENET1_RGMII_RD0		0x91
+			MX8MM_IOMUXC_ENET_TXC_ENET1_RGMII_TXC		0x1f
+			MX8MM_IOMUXC_ENET_RXC_ENET1_RGMII_RXC		0x91
+			MX8MM_IOMUXC_ENET_RX_CTL_ENET1_RGMII_RX_CTL	0x91
+			MX8MM_IOMUXC_ENET_TX_CTL_ENET1_RGMII_TX_CTL	0x1f
+		>;
+	};
+};
