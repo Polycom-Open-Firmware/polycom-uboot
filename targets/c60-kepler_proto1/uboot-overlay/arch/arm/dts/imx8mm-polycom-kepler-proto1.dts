@@ -170,3 +170,66 @@
 		>;
 	};
 };
+
+/*
+ * F3 networking (#17): FEC fixed-link 1G/full RGMII + the RTL8363NB-VB
+ * switch on the FEC MDIO bus @ 0x1d.
+ *
+ * Unlike the HAB-closed TC8 (which chainloads from stock u-boot that
+ * pre-inits the switch, so TC8 just inherits a transparent switch with
+ * NO mdio/switch node), the C60 boots fresh via uuu/SDP — NO stock
+ * pre-init. So we DO describe the switch and let the universal
+ * rtl8363nbvb driver run the full 7-stage cold init on probe.
+ *
+ * NO reset-gpios on purpose: the idempotent driver discriminates by
+ * the live config fingerprint (CPU_CTRL 0x121A / INTF1_FORCE 0x1311),
+ * not by a GPIO. A power-on-default C60 chip reads != the transparent
+ * fingerprint -> driver runs the full cold init; a stock-pre-inited
+ * unit reads == fingerprint -> driver inherit-skips. Same DT works for
+ * both targets. (If a cold C60 ever needs a hard reset pulse, add
+ * reset-gpios with the RE'd eth-rst pin then.) pinctrl_fec1 = the
+ * SoC-standard i.MX8MM RGMII pad group (same on TC8/C60 — same SoC).
+ */
+&fec1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_fec1>;
+	phy-mode = "rgmii-id";
+	phy-handle = <&fec_fixed_link>;
+	status = "okay";
+
+	fec_fixed_link: fixed-link {
+		speed = <1000>;
+		full-duplex;
+	};
+
+	mdio {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		rtl8363: switch@1d {
+			compatible = "realtek,rtl8363nbvb";
+			reg = <0x1d>;
+		};
+	};
+};
+
+&iomuxc {
+	pinctrl_fec1: fec1grp {
+		fsl,pins = <
+			MX8MM_IOMUXC_ENET_MDC_ENET1_MDC			0x3
+			MX8MM_IOMUXC_ENET_MDIO_ENET1_MDIO		0x3
+			MX8MM_IOMUXC_ENET_TD3_ENET1_RGMII_TD3		0x1f
+			MX8MM_IOMUXC_ENET_TD2_ENET1_RGMII_TD2		0x1f
+			MX8MM_IOMUXC_ENET_TD1_ENET1_RGMII_TD1		0x1f
+			MX8MM_IOMUXC_ENET_TD0_ENET1_RGMII_TD0		0x1f
+			MX8MM_IOMUXC_ENET_RD3_ENET1_RGMII_RD3		0x91
+			MX8MM_IOMUXC_ENET_RD2_ENET1_RGMII_RD2		0x91
+			MX8MM_IOMUXC_ENET_RD1_ENET1_RGMII_RD1		0x91
+			MX8MM_IOMUXC_ENET_RD0_ENET1_RGMII_RD0		0x91
+			MX8MM_IOMUXC_ENET_TXC_ENET1_RGMII_TXC		0x1f
+			MX8MM_IOMUXC_ENET_RXC_ENET1_RGMII_RXC		0x91
+			MX8MM_IOMUXC_ENET_RX_CTL_ENET1_RGMII_RX_CTL	0x91
+			MX8MM_IOMUXC_ENET_TX_CTL_ENET1_RGMII_TX_CTL	0x1f
+		>;
+	};
+};
