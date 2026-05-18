@@ -8,6 +8,8 @@
 #include <init.h>
 #include <miiphy.h>
 #include <netdev.h>
+#include <dm.h>
+#include <dm/uclass.h>
 #include <asm/global_data.h>
 #include <asm/mach-imx/iomux-v3.h>
 #include <asm-generic/gpio.h>
@@ -335,6 +337,64 @@ int board_init(void)
 	return 0;
 }
 
+#if IS_ENABLED(CONFIG_PHY_REALTEK)	/* rtl8363nbvb builds with this */
+extern int rtl8363nbvb_bringup(void);
+/*
+ * #17: bring up the RTL8363NB-VB transparent switch.
+ *
+ * Probe the FEC first (uclass_first_device UCLASS_ETH) — that runs
+ * fec_get_miibus()/mdio_register(), so the LEGACY "FEC" miiphy bus
+ * exists and its MDIO HW is up. Then rtl8363nbvb_bringup() does the
+ * 7-stage init over miiphy("FEC"). NO DM-mdio / NO DT-binding: those
+ * pulled in the DM->legacy-miiphy bridge whose mdio_register strcmp
+ * data-aborted here (esr 0x96000004) and wedged u-boot in SDP.
+ * Idempotent: inherit-skips an already-configured switch.
+ */
+/*
+ * C60 RTL8363NB-VB eth-reset = GPIO1_IO11 (stock c60.dts
+ * `gpio-eth-rst = <&gpio1 11 ...>`; TC8 differs = GPIO5_IO02). On the
+ * uuu/SDP -> our-u-boot path NOTHING releases it (stock u-boot/kernel
+ * normally would), so the cold switch is held in reset -> no MDIO
+ * responder -> every read errors -> rtl83_detect sees 0x00010001.
+ * Pulse it per the clean-room/stock sequence: LOW (assert) ~700us,
+ * HIGH (release) >=3ms, leave HIGH.
+ */
+static iomux_v3_cfg_t const eth_rst_pads[] = {
+	IMX8MM_PAD_GPIO1_IO11_GPIO1_IO11 | MUX_PAD_CTRL(PAD_CTL_DSE6),
+};
+
+static void c60_rtl8363_kick(void)
+{
+	struct udevice *d;
+	int rst = IMX_GPIO_NR(1, 11);
+
+	imx_iomux_v3_setup_multiple_pads(eth_rst_pads,
+					 ARRAY_SIZE(eth_rst_pads));
+	if (!gpio_request(rst, "eth-rst")) {
+		gpio_direction_output(rst, 0);	/* assert reset (LOW)  */
+		udelay(800);
+		gpio_set_value(rst, 1);		/* release (HIGH)      */
+		udelay(5000);			/* >=3ms settle        */
+	}
+
+	/*
+	 * mii_devs is `static struct list_head mii_devs;` — NOT a
+	 * static LIST_HEAD. It's only valid after miiphy_init() runs
+	 * INIT_LIST_HEAD(). miiphy_init() is normally called from the
+	 * NET init path (net/eth_common.c), which runs AFTER
+	 * board_late_init. So forcing the FEC probe here (->
+	 * fec_get_miibus -> mdio_register -> list ops) and then
+	 * miiphy_read("FEC") would operate on an UNINITIALISED list ->
+	 * corruption -> strcmp() data-abort (esr 0x96000004), u-boot
+	 * resets, C60 stuck in SDP. Initialise it ourselves first
+	 * (safe: nothing is registered yet at this point).
+	 */
+	miiphy_init();
+	uclass_first_device(UCLASS_ETH, &d);	/* FEC -> "FEC" mii bus up */
+	rtl8363nbvb_bringup();
+}
+#endif
+
 int board_late_init(void)
 {
 #ifdef CONFIG_ENV_IS_IN_MMC
@@ -346,6 +406,9 @@ int board_late_init(void)
 		env_set("board_rev", "iMX8MM");
 	}
 
+#if IS_ENABLED(CONFIG_PHY_REALTEK)
+	c60_rtl8363_kick();
+#endif
 	return 0;
 }
 

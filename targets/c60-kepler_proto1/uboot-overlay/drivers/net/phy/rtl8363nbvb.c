@@ -30,13 +30,25 @@
  */
 
 #include <common.h>
-#include <dm.h>
 #include <log.h>
 #include <miiphy.h>
 #include <linux/delay.h>
 #include <linux/bitops.h>
-#include <asm/gpio.h>
-#include <dm/device_compat.h>
+
+/*
+ * Transport = LEGACY miiphy on the FEC bus "FEC" (fec_get_miibus()
+ * registers it via mdio_register BEFORE any CONFIG_DM_MDIO ifdef).
+ * NOT DM-MDIO: the DM-mdio->legacy bridge data-aborts in
+ * mdio_register's strcmp (see defconfig note). No DM device / no DT
+ * binding — the C60 board_late_init hook calls rtl8363nbvb_bringup()
+ * after the FEC (hence "FEC" mii bus) is up. dev_* are reduced to
+ * prefixed printf (the `dev` arg is unused/NULL).
+ */
+#define MIIBUS	"FEC"
+#define dev_err(d, fmt, ...)	printf("rtl8363nbvb: " fmt, ##__VA_ARGS__)
+#define dev_info(d, fmt, ...)	printf("rtl8363nbvb: " fmt, ##__VA_ARGS__)
+#define dev_warn(d, fmt, ...)	printf("rtl8363nbvb: " fmt, ##__VA_ARGS__)
+#define dev_dbg(d, fmt, ...)	debug("rtl8363nbvb: " fmt, ##__VA_ARGS__)
 
 /* --- Indirect-access protocol over the FEC MDIO bus (switch @ 0x1d) ---
  *   write reg31 = 0x000E   (address phase)
@@ -88,10 +100,8 @@
 #define RTL_OUI_REALTEK			0x001cc943
 
 struct rtl8363_priv {
-	struct udevice		*mdio;	/* parent UCLASS_MDIO (FEC bus) */
-	int			addr;	/* switch SMI addr on mdio (0x1d) */
-	struct gpio_desc	reset;	/* optional; valid => cold-init */
-	bool			has_reset;
+	int	addr;		/* switch SMI addr on the FEC mii bus (0x1d) */
+	bool	has_reset;	/* always false here (no GPIO reset path) */
 };
 
 /* AUTO-EXTRACTED data tables — DO NOT hand-edit.
@@ -408,14 +418,17 @@ static const u8 rtl8363_8051_fw[1507] = {
 	0xf5, 0x8e, 0x22,
 };
 
-/* ---- MDIO indirect SMI primitives (via parent DM MDIO bus) -------- */
+/* ---- MDIO indirect SMI primitives (legacy miiphy on "FEC" bus) ---- */
 static int r83_mr(struct rtl8363_priv *p, int reg)
 {
-	return dm_mdio_read(p->mdio, p->addr, MDIO_DEVAD_NONE, reg);
+	u16 v = 0;
+	int e = miiphy_read(MIIBUS, p->addr, reg, &v);
+
+	return e ? e : (int)v;
 }
 static int r83_mw(struct rtl8363_priv *p, int reg, u16 v)
 {
-	return dm_mdio_write(p->mdio, p->addr, MDIO_DEVAD_NONE, reg, v);
+	return miiphy_write(MIIBUS, p->addr, reg, v);
 }
 
 static int rtl83_smi_write(struct rtl8363_priv *p, u16 reg, u16 val)
@@ -504,13 +517,14 @@ static int rtl83_phy_ocp_read(struct rtl8363_priv *p, u8 phy,
 	dev_err(dev, "%s failed (%d)\n", #_c, ret); return ret; } } while (0)
 
 /* ---- chip identity: PHY1 reg2/3 direct on the FEC bus ------------- */
-static int rtl83_detect(struct udevice *dev, struct rtl8363_priv *p)
+static int rtl83_detect(void *dev, struct rtl8363_priv *p)
 {
+	u16 h = 0, l = 0;
 	int hi, lo;
 	u32 oui;
 
-	hi = dm_mdio_read(p->mdio, 1, MDIO_DEVAD_NONE, MII_PHYSID1);
-	lo = dm_mdio_read(p->mdio, 1, MDIO_DEVAD_NONE, MII_PHYSID2);
+	hi = miiphy_read(MIIBUS, 1, MII_PHYSID1, &h); hi = hi ? hi : h;
+	lo = miiphy_read(MIIBUS, 1, MII_PHYSID2, &l); lo = lo ? lo : l;
 	if (hi < 0 || lo < 0) {
 		dev_err(dev, "PHY ID read failed (hi=%d lo=%d)\n", hi, lo);
 		return hi < 0 ? hi : lo;
@@ -525,21 +539,20 @@ static int rtl83_detect(struct udevice *dev, struct rtl8363_priv *p)
 	return 0;
 }
 
-static void rtl83_chip_reset(struct udevice *dev, struct rtl8363_priv *p)
+static void rtl83_chip_reset(void *dev, struct rtl8363_priv *p)
 {
-	if (!p->has_reset) {
-		dev_dbg(dev, "no reset-gpios; assuming pre-released/inherited\n");
-		return;
-	}
-	dev_info(dev, "asserting chip reset (cold-init)\n");
-	dm_gpio_set_value(&p->reset, 1);	/* assert (DT = ACTIVE_LOW) */
-	udelay(RTL_RESET_LOW_US);
-	dm_gpio_set_value(&p->reset, 0);	/* deassert */
-	udelay(RTL_RESET_HIGH_US);
+	/*
+	 * No GPIO reset path (would need DM gpio + a DT reset-gpios).
+	 * A power-on C60 chip is already at POR defaults; the full
+	 * init programs it from there, and rtl83_already_up() handles
+	 * the inherited-already-configured case. Kept as a no-op so
+	 * the bringup sequence/structure matches the clean-room driver.
+	 */
+	(void)dev; (void)p;
 }
 
 /* ---- PHY OCP patch ritual + 210-entry table ---------------------- */
-static int rtl83_phy_patch_ritual(struct udevice *dev,
+static int rtl83_phy_patch_ritual(void *dev,
 				   struct rtl8363_priv *p, u8 phy)
 {
 	u16 v = 0;
@@ -568,7 +581,7 @@ static int rtl83_phy_patch_ritual(struct udevice *dev,
 	return 0;
 }
 
-static int rtl83_apply_phy_patch(struct udevice *dev,
+static int rtl83_apply_phy_patch(void *dev,
 				 struct rtl8363_priv *p, u8 phy)
 {
 	int ret;
@@ -582,7 +595,7 @@ static int rtl83_apply_phy_patch(struct udevice *dev,
 }
 
 /* ---- SDK port: _rtk_switch_init_8367c (jam table) ---------------- */
-static int rtl83_init_8367c(struct udevice *dev, struct rtl8363_priv *p)
+static int rtl83_init_8367c(void *dev, struct rtl8363_priv *p)
 {
 	int ret;
 	u8 phy;
@@ -653,7 +666,7 @@ static int rtl83_init_8367c(struct udevice *dev, struct rtl8363_priv *p)
 }
 
 /* ---- SDK port: port_admin_init (1507-byte 8051 fw -> 0xe000+) ---- */
-static int rtl83_port_admin_init(struct udevice *dev, struct rtl8363_priv *p)
+static int rtl83_port_admin_init(void *dev, struct rtl8363_priv *p)
 {
 	u16 chip_ver;
 	size_t i;
@@ -688,7 +701,7 @@ static int rtl83_port_admin_init(struct udevice *dev, struct rtl8363_priv *p)
 	return 0;
 }
 
-static int rtl83_setup_cpu_port(struct udevice *dev, struct rtl8363_priv *p)
+static int rtl83_setup_cpu_port(void *dev, struct rtl8363_priv *p)
 {
 	int ret;
 
@@ -701,19 +714,19 @@ static int rtl83_setup_cpu_port(struct udevice *dev, struct rtl8363_priv *p)
 	return 0;
 }
 
-static int rtl83_setup_user_port(struct udevice *dev, struct rtl8363_priv *p)
+static int rtl83_setup_user_port(void *dev, struct rtl8363_priv *p)
 {
 	int ret;
 
 	dev_info(dev, "user port %d autoneg\n", RTL_USER_PORT);
-	dm_mdio_write(p->mdio, RTL_USER_PORT, MDIO_DEVAD_NONE, MII_BMCR,
-		      BMCR_ANENABLE | BMCR_ANRESTART);
+	miiphy_write(MIIBUS, RTL_USER_PORT, MII_BMCR,
+		     BMCR_ANENABLE | BMCR_ANRESTART);
 	RTL_DO(rtl83_smi_write(p, RTL_REG_PORT_ISO_PORT_MASK_BASE +
 			       RTL_USER_PORT * 2, 0x00ff));
 	return 0;
 }
 
-static int rtl83_set_transparent_mode(struct udevice *dev,
+static int rtl83_set_transparent_mode(void *dev,
 				      struct rtl8363_priv *p)
 {
 	int ret;
@@ -741,7 +754,7 @@ static bool rtl83_already_up(struct rtl8363_priv *p)
 	       f1 == RTL_INTF1_FORCE_RGMII_1G;
 }
 
-static int rtl83_bringup(struct udevice *dev, struct rtl8363_priv *p)
+static int rtl83_bringup(void *dev, struct rtl8363_priv *p)
 {
 	int ret;
 
@@ -765,41 +778,15 @@ static int rtl83_bringup(struct udevice *dev, struct rtl8363_priv *p)
 	return 0;
 }
 
-/* ---- DM glue ----------------------------------------------------- */
-static int rtl8363_probe(struct udevice *dev)
+/* ---- entry point: called from C60 board_late_init AFTER the FEC
+ * (hence the "FEC" legacy mii bus) is up. NO DM device / NO DT
+ * binding (those pulled in the DM-mdio->legacy bridge that
+ * data-aborted in mdio_register's strcmp, wedging u-boot in SDP).
+ * Idempotent: rtl83_already_up() inherit-skips a pre-configured
+ * switch; a cold C60 chip gets the full 7-stage init. ---------- */
+int rtl8363nbvb_bringup(void)
 {
-	struct rtl8363_priv *p = dev_get_priv(dev);
-	int ret;
+	struct rtl8363_priv pr = { .addr = 0x1d, .has_reset = false };
 
-	/* parent of switch@1d is the FEC's UCLASS_MDIO bus device */
-	p->mdio = dev_get_parent(dev);
-	if (!p->mdio || device_get_uclass_id(p->mdio) != UCLASS_MDIO) {
-		dev_err(dev, "parent is not a DM MDIO bus\n");
-		return -EINVAL;
-	}
-	p->addr = dev_read_u32_default(dev, "reg", 0x1d);
-
-	ret = gpio_request_by_name(dev, "reset-gpios", 0, &p->reset,
-				   GPIOD_IS_OUT);
-	p->has_reset = (ret == 0);
-
-	dev_info(dev, "binding on MDIO %s addr 0x%02x%s\n",
-		 p->mdio->name, p->addr,
-		 p->has_reset ? " (reset-gpios: cold-init)" :
-				" (no reset: inherit-capable)");
-	return rtl83_bringup(dev, p);
+	return rtl83_bringup(NULL, &pr);
 }
-
-static const struct udevice_id rtl8363_ids[] = {
-	{ .compatible = "realtek,rtl8363nbvb" },
-	{ }
-};
-
-U_BOOT_DRIVER(rtl8363nbvb) = {
-	.name		= "rtl8363nbvb",
-	.id		= UCLASS_ETH_PHY,
-	.of_match	= rtl8363_ids,
-	.probe		= rtl8363_probe,
-	.priv_auto	= sizeof(struct rtl8363_priv),
-	.flags		= DM_FLAG_PRE_RELOC,
-};

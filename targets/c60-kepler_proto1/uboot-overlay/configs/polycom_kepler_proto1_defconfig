@@ -150,8 +150,13 @@ CONFIG_PHY_GIGE=y
 CONFIG_PHY_FIXED=y
 CONFIG_FEC_MXC=y
 CONFIG_MII=y
-CONFIG_DM_MDIO=y
-CONFIG_DM_ETH_PHY=y
+# NO CONFIG_DM_MDIO / CONFIG_DM_ETH_PHY: the DM-mdio->legacy-miiphy
+# bridge they pull in registers a garbage-name mii_dev that makes
+# mdio_register()'s dup-check strcmp data-abort (esr 0x96000004) in
+# board_late_init -> u-boot resets, device stuck in SDP. Known-good
+# C60 u-boot has CONFIG_MII only. The rtl8363nbvb switch init uses
+# the legacy miiphy("FEC") bus (fec_get_miibus registers it before
+# any DM_MDIO ifdef), driven from the board_late_init hook.
 CONFIG_PINCTRL=y
 CONFIG_PINCTRL_IMX8M=y
 CONFIG_POWER_DOMAIN=y
