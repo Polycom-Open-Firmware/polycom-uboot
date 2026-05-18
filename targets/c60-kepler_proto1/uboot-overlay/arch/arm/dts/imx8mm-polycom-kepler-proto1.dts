@@ -187,6 +187,28 @@
 	pinctrl-0 = <&pinctrl_fec1>;
 	phy-mode = "rgmii-id";
 	phy-handle = <&fec_fixed_link>;
+	/*
+	 * ROOT CAUSE of the #17 cold-MDIO blocker (deterministic): the
+	 * external RTL8363NB-VB is fed its reference clock from the SoC
+	 * ENET_PHY_REF / enet_out. Base imx8mm.dtsi fec1 leaves
+	 * ENET_PHY_REF assigned-clock-rate = <0> (UNSET) so CLK_IMX8MM
+	 * never programs/enables it -> switch unclocked -> never ACKs
+	 * MDIO (while FEC-MAC TX still works since ipg/ahb/enet_ref are
+	 * clocked). Stock C60 u-boot drives it manually (fec1_rst /
+	 * FUN_4020510c, re/c60_uboot_fec_enable_RE.md). Mainline-idiomatic
+	 * fix: restate assigned-clocks and give ENET_PHY_REF a real rate
+	 * (parent SYS_PLL2_50M -> 50 MHz) so the clk driver enables the
+	 * switch's ref clock — no raw CCM pokes.
+	 */
+	assigned-clocks = <&clk IMX8MM_CLK_ENET_AXI>,
+			  <&clk IMX8MM_CLK_ENET_TIMER>,
+			  <&clk IMX8MM_CLK_ENET_REF>,
+			  <&clk IMX8MM_CLK_ENET_PHY_REF>;
+	assigned-clock-parents = <&clk IMX8MM_SYS_PLL1_266M>,
+				 <&clk IMX8MM_SYS_PLL2_100M>,
+				 <&clk IMX8MM_SYS_PLL2_125M>,
+				 <&clk IMX8MM_SYS_PLL2_50M>;
+	assigned-clock-rates = <0>, <100000000>, <125000000>, <50000000>;
 	status = "okay";
 
 	fec_fixed_link: fixed-link {

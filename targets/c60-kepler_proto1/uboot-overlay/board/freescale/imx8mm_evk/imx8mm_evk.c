@@ -351,47 +351,64 @@ extern int rtl8363nbvb_bringup(void);
  * Idempotent: inherit-skips an already-configured switch.
  */
 /*
- * C60 RTL8363NB-VB eth-reset = GPIO1_IO11 (stock c60.dts
- * `gpio-eth-rst = <&gpio1 11 ...>`; TC8 differs = GPIO5_IO02). On the
- * uuu/SDP -> our-u-boot path NOTHING releases it (stock u-boot/kernel
- * normally would), so the cold switch is held in reset -> no MDIO
- * responder -> every read errors -> rtl83_detect sees 0x00010001.
- * Pulse it per the clean-room/stock sequence: LOW (assert) ~700us,
- * HIGH (release) >=3ms, leave HIGH.
+ * C60 FEC/switch enable — deterministically RE'd from stock C60
+ * u-boot 2018.03 FUN_40205ea4 ("fec1_rst" board fn):
+ *   gpio_request(0x76,"fec1_rst");           // 0x76=118=GPIO4_IO22
+ *   gpio_direction_output(0x76,0); udelay(500); gpio_set_value(0x76,1);
+ *   IOMUXC_GPR1 (0x30340004) &= 0xfffffff2;  // clear bits 0,2,3
+ *                                            // = ENET RGMII clk-dir
+ * (FUN_4020510c(2) ENET-CCM-clock-root setup also follows in stock;
+ * our DM CLK_IMX8MM + fec1 DT clocks should cover that — try the
+ * board-specific reset+GPR1 first, add CCM port if MDIO still dead.)
+ * NOT GPIO1_IO11 (that is the *kernel* gpio-eth-rst, a different
+ * later reset; our earlier GPIO1_IO11 attempts read 0xffff/ERR).
  */
 static iomux_v3_cfg_t const eth_rst_pads[] = {
-	IMX8MM_PAD_GPIO1_IO11_GPIO1_IO11 | MUX_PAD_CTRL(PAD_CTL_DSE6),
+	/* "fec1_rst" = GPIO4_IO22 (SAI2_RXC ALT5), linear 0x76/118 —
+	 * deterministically RE'd from stock C60 u-boot FUN_40205ea4
+	 * (gpio_request(0x76,"fec1_rst")). NOT GPIO1_IO11 (that's the
+	 * kernel's gpio-eth-rst, a different/later reset). */
+	IMX8MM_PAD_SAI2_RXC_GPIO4_IO22 | MUX_PAD_CTRL(PAD_CTL_DSE6),
 };
+
+/*
+ * "fec1_rst" reset = GPIO4_IO22 (stock FUN_40205ea4, RE'd). The
+ * ENET-clock half of stock's sequence is now done the mainline way
+ * via &fec1 assigned-clock-rates (ENET_PHY_REF=50M) — see the DTS;
+ * the raw-CCM/GPR1 poke port was dropped (wrong abstraction, fought
+ * the DM clk driver). Reset the cold switch out of reset; the clk
+ * driver (FEC probe) drives its ref clock.
+ */
+static void c60_fec1_reset(void)
+{
+	int rst = IMX_GPIO_NR(4, 22);		/* "fec1_rst" 0x76 */
+
+	imx_iomux_v3_setup_multiple_pads(eth_rst_pads,
+					 ARRAY_SIZE(eth_rst_pads));
+	if (!gpio_request(rst, "fec1_rst")) {
+		gpio_direction_output(rst, 0);	/* assert reset (LOW) */
+		udelay(500);			/* stock: udelay(500) */
+		gpio_set_value(rst, 1);		/* release (HIGH)     */
+		udelay(2000);			/* settle before MDIO  */
+	}
+}
 
 static void c60_rtl8363_kick(void)
 {
 	struct udevice *d;
-	int rst = IMX_GPIO_NR(1, 11);
-
-	imx_iomux_v3_setup_multiple_pads(eth_rst_pads,
-					 ARRAY_SIZE(eth_rst_pads));
-	if (!gpio_request(rst, "eth-rst")) {
-		gpio_direction_output(rst, 0);	/* assert reset (LOW)  */
-		udelay(800);
-		gpio_set_value(rst, 1);		/* release (HIGH)      */
-		udelay(5000);			/* >=3ms settle        */
-	}
 
 	/*
-	 * mii_devs is `static struct list_head mii_devs;` — NOT a
-	 * static LIST_HEAD. It's only valid after miiphy_init() runs
-	 * INIT_LIST_HEAD(). miiphy_init() is normally called from the
-	 * NET init path (net/eth_common.c), which runs AFTER
-	 * board_late_init. So forcing the FEC probe here (->
-	 * fec_get_miibus -> mdio_register -> list ops) and then
-	 * miiphy_read("FEC") would operate on an UNINITIALISED list ->
-	 * corruption -> strcmp() data-abort (esr 0x96000004), u-boot
-	 * resets, C60 stuck in SDP. Initialise it ourselves first
-	 * (safe: nothing is registered yet at this point).
+	 * miiphy_init() before any mdio_register (mii_devs is a plain
+	 * `static struct list_head`, only valid after INIT_LIST_HEAD;
+	 * the net path inits it AFTER board_late_init -> uninitialised
+	 * -> strcmp data-abort otherwise).
 	 */
 	miiphy_init();
-	uclass_first_device(UCLASS_ETH, &d);	/* FEC -> "FEC" mii bus up */
-	rtl8363nbvb_bringup();
+	uclass_first_device(UCLASS_ETH, &d);	/* FEC probe: mii bus up;
+						 * CLK_IMX8MM drives ENET_PHY_REF
+						 * (enet_out) per DTS */
+	c60_fec1_reset();			/* switch out of reset */
+	rtl8363nbvb_bringup();			/* MDIO */
 }
 #endif
 
