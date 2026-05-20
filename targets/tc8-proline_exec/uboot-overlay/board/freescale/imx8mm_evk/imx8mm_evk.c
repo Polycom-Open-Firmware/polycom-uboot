@@ -412,6 +412,30 @@ int board_init(void)
 	return 0;
 }
 
+/*
+ * TC8 stage-2 chainload: env-load device remap.
+ *
+ * NXP's mach-imx/mmc_env.c::mmc_get_env_dev() reads boot_dev_instance
+ * from the BootROM SW info block — but on TC8 we are NOT booting from
+ * BootROM, we are chainloaded by stock u-boot 2018.03 via `go`. Stock
+ * SPL filled boot_dev_instance with its OWN MMC numbering, in which
+ * the eMMC user area is mmc 2. Stage-2 (NXP 2024.04) enumerates only
+ * a single FSL_SDHC controller as mmc 0 — so find_mmc_device(2)
+ * returns NULL and env load prints "MMC Device 2 not found", falling
+ * back to compiled defaults (which lack the rotation + console=tty0 +
+ * fw_devlink=permissive bits that onboard.sh persists into env).
+ *
+ * Remap devno 2 -> 0 so stage-2 reads the SAME env partition stock
+ * already populated. CONFIG_ENV_OFFSET (0x700000) lands at the right
+ * physical offset on the eMMC user area regardless of which numerical
+ * device-id we use, as long as we end up pointing at the user area
+ * itself (which mmc 0 in stage-2 IS).
+ */
+int board_mmc_get_env_dev(int devno)
+{
+	return devno == 2 ? 0 : devno;
+}
+
 int board_late_init(void)
 {
 #ifdef CONFIG_ENV_IS_IN_MMC
@@ -476,11 +500,25 @@ int board_late_init(void)
 	 * mmc0=usdhc3). tc8_bootargs is finalised at OS-install (profiles/
 	 * emmc.env KERNEL_CMDLINE); this default is overridable via env.
 	 */
+	/*
+	 * Default must match profiles/emmc.env KERNEL_CMDLINE so the
+	 * panel renders correctly (rotate=270 + fbcon=rotate:3 + cage -r
+	 * x 7 transform 7 = FLIPPED_270 — see tc8-kernel-patches 0001/
+	 * 0002/0006 + tc8-rootfs cage patch). Stage-2's CONFIG_ENV_OFFSET
+	 * (0x700000) differs from stock 2018.03's env at 0x400000, so
+	 * fw_setenv from Linux can't reliably reach stage-2's env block;
+	 * keep the working cmdline in defaults so we don't depend on
+	 * saved env state.
+	 */
 	if (!env_get("tc8_bootargs"))
 		env_set("tc8_bootargs",
-			"console=ttymxc1,115200 "
+			"console=tty0 console=ttymxc1,115200 "
 			"earlycon=ec_imx6q,0x30890000,115200 "
-			"root=/dev/mmcblk2p5 rootwait rw panic=10");
+			"keep_bootcon panic=10 rw rootwait "
+			"fw_devlink=permissive "
+			"video=DSI-1:rotate=270 fbcon=rotate:3 "
+			"vt.global_cursor_default=0 "
+			"root=/dev/mmcblk2p5");
 	/*
 	 * FORCE-override mmcboot UNCONDITIONALLY (no !env_get guard).
 	 * Stock imx8mm_evk's built-in default env ALREADY defines a
