@@ -5,7 +5,7 @@ Mainline u-boot for Polycom i.MX 8M Mini devices — currently:
 | Build target              | Device                   | Codename          | DRAM         |
 |---------------------------|--------------------------|-------------------|--------------|
 | `c60-kepler_proto1`       | Trio C60                 | kepler_proto1     | 2 GiB LPDDR4 |
-| `tc8-proline_exec`        | TC8 conference tablet    | proline_exec      | 2 GiB LPDDR4 |
+| `tc8-chainload-uboot`     | TC8 conference tablet    | proline_exec      | 2 GiB LPDDR4 |
 
 Both use the same i.MX 8M Mini Quad SoC and (per 2026-05-14 live testing)
 share DDR training configs — but each has its own board file, DT, and any
@@ -38,7 +38,7 @@ targets/
     dts/                    u-boot-side DTS
     ddr/                    extracted DDR config (or copy from upstream)
     target.env              build vars
-  tc8-proline_exec/         Polycom TC8
+  tc8-chainload-uboot/      Polycom TC8 (codename proline_exec) — chainloaded stage-2
     (same layout)
 patches/                    patches applied over upstream nxp-imx/uboot-imx
 scripts/
@@ -53,7 +53,7 @@ out/                        per-target build artifacts (gitignored)
 
 ```sh
 ./scripts/build.sh c60-kepler_proto1
-./scripts/build.sh tc8-proline_exec
+./scripts/build.sh tc8-chainload-uboot
 
 ./scripts/flash-via-uuu.sh out/c60-kepler_proto1/imxboot-c60.bin
 ```
