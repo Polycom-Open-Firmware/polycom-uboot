@@ -876,8 +876,16 @@ static int do_osprep(struct cmd_tbl *cmdtp, int flag, int argc,
 	if (!uclass_first_device_err(UCLASS_VIDEO, &vid)) {
 		struct video_priv *p = dev_get_uclass_priv(vid);
 
-		vt_fill(p, 0x000000);		/* black -> no logo bleed-through */
+		vt_fill(p, 0x000000);		/* paint a black frame... */
 		video_sync(vid, true);
+		/*
+		 * ...then STOP the eLCDIF scan-out (HW_LCDIF_CTRL bit0 RUN, cleared
+		 * atomically via HW_LCDIF_CTRL_CLR @ base+0x08). The kernel overwrites
+		 * the framebuffer DRAM during boot; if the LCDIF keeps scanning that
+		 * region the panel shows garbage until the DRM driver re-inits. Freezing
+		 * on the black frame above eliminates the u-boot->Linux transition garble.
+		 */
+		writel(BIT(0), (void __iomem *)(ulong)(0x32e00000 + 0x08));
 	}
 	/*
 	 * Re-latch the GT9271 to 0x5d — its power-on default and the address the
