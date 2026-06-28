@@ -467,7 +467,7 @@ int board_late_init(void)
 	 * logo + netboot, with the fastboot-provisioning fallback.
 	 */
 	env_set("bootcmd",
-		"run gesture_sel;run dhcp66_boot;run mmcboot;"
+		"run gesture_sel;osprep;run dhcp66_boot;run mmcboot;"
 		"echo '*** no bootable OS - entering fastboot for provisioning ***';"
 		"fastboot usb 0");
 
@@ -718,8 +718,14 @@ static int gt9271_finger_count(void)
 				mdelay(GESTURE_SAMPLE_MS);
 			}
 			if (best >= 0) {
-				printf("gesture: GT9271 on i2c%d@0x%02x\n",
-				       busnum, addrs[ai]);
+				/* announce the controller once, not on every poll
+				 * (bootsel calls this ~100x across its window). */
+				static bool gt_announced;
+				if (!gt_announced) {
+					printf("gesture: GT9271 on i2c%d@0x%02x\n",
+					       busnum, addrs[ai]);
+					gt_announced = true;
+				}
 				return best;
 			}
 		}
@@ -846,6 +852,31 @@ static int do_vtest(struct cmd_tbl *cmdtp, int flag, int argc,
 U_BOOT_CMD(vtest, 2, 0, do_vtest,
 	   "F2 panel test: R/G/B + colorbars + checkerboard [loops]",
 	   "[loops]");
+
+/*
+ * --- OS handoff prep: quiesce the panel + reset touch before booting -------
+ * Called from bootcmd right before the OS boots. (1) Clear the panel to black
+ * so the OS doesn't inherit the bootsel logo / show garbage while its DRM
+ * driver re-inits. (2) Reset the GT9271 to a clean post-power-on state (addr
+ * 0x14) so the OS touch driver starts from a known reset rather than our
+ * scanning cfg (fixes intermittent touch in the booted OS).
+ */
+static int do_osprep(struct cmd_tbl *cmdtp, int flag, int argc,
+		     char *const argv[])
+{
+	struct udevice *vid;
+
+	if (!uclass_first_device_err(UCLASS_VIDEO, &vid)) {
+		struct video_priv *p = dev_get_uclass_priv(vid);
+
+		vt_fill(p, 0x000000);		/* black -> no logo bleed-through */
+		video_sync(vid, true);
+	}
+	gt9271_reset();				/* clean touch reset for the OS */
+	return 0;
+}
+U_BOOT_CMD(osprep, 1, 0, do_osprep,
+	   "TC8: quiesce panel + reset GT9271 touch before OS handoff", "");
 
 /*
  * --- F1+F2 boot-UX: `bootsel` ---------------------------------------------
