@@ -458,6 +458,20 @@ int board_late_init(void)
 		env_set("gesture_sel", "bootsel");
 
 	/*
+	 * imx8mm_evk_android.h does `#undef CONFIG_BOOTCOMMAND` when
+	 * ANDROID_SUPPORT is on, so the Android default ("boota mmc0") would own
+	 * bootcmd and skip our gesture+logo UX entirely. Force our boot flow here
+	 * UNGUARDED (the Android default already occupies bootcmd, so a
+	 * !env_get() guard would never fire). mmcboot itself is `boota`, so we
+	 * still boot via the Android path — just after the gesture selector +
+	 * logo + netboot, with the fastboot-provisioning fallback.
+	 */
+	env_set("bootcmd",
+		"run gesture_sel;osprep;run dhcp66_boot;run mmcboot;"
+		"echo '*** no bootable OS - entering fastboot for provisioning ***';"
+		"fastboot usb 0");
+
+	/*
 	 * TC8 unlock F3: DHCP-66 netboot. bootcmd runs `dhcp66_boot` after
 	 * the gesture selector. If a DHCP server hands out opt-66 (TFTP
 	 * server, -> ${serverip}) + opt-67 (bootfile), TFTP that FIT image
@@ -518,7 +532,11 @@ int board_late_init(void)
 			"fw_devlink=permissive "
 			"video=DSI-1:rotate=270 fbcon=rotate:3 "
 			"vt.global_cursor_default=0 "
-			"root=/dev/mmcblk2p5");
+			/* Option-A layout: KEEP stock GPT, rootfs lives in the stock
+			 * `userdata` partition. PARTLABEL is robust vs. p-number
+			 * (stock GPT has ~16 entries). If PARTLABEL fails on-device,
+			 * fall back to the explicit /dev/mmcblk2pN for userdata. */
+			"root=PARTLABEL=userdata");
 	/*
 	 * FORCE-override mmcboot UNCONDITIONALLY (no !env_get guard).
 	 * Stock imx8mm_evk's built-in default env ALREADY defines a
@@ -534,12 +552,19 @@ int board_late_init(void)
 	 * them) so they keep the !env_get guard; only mmcboot must be
 	 * forced.
 	 */
-	env_set("mmcboot",
-		"mmc dev 0; "
-		"mmc read 0x40000000 0x8000 0x18000; "
-		"mmc read 0x43400000 0x38000 0x2000; "
-		"setenv bootargs ${tc8_bootargs}; "
-		"booti 0x40000000 - 0x43400000");
+	/*
+	 * UNIFIED ANDROID BOOT (2026-06-27): boot via NXP `boota` — the
+	 * established Android path, run UNLOCKED (fastboot_get_lock_stat stub
+	 * -> FASTBOOT_UNLOCK) so it boots UNSIGNED images. `boota` reads the
+	 * active slot from the `misc` bootctrl, loads boot_<slot> + the DTB from
+	 * dtbo_<slot> (Android DTBO container) + vbmeta_<slot>, AVB-checks
+	 * (tolerant when unlocked), builds the cmdline, and booti's. Same method
+	 * boots stock Android (slot A) and our Linux packaged as a slot image
+	 * (slot B: boot.img + dtbo + vbmeta). Switch with `fastboot set_active`.
+	 * On failure boota drops to fastboot itself; bootcmd's trailing
+	 * `fastboot usb 0` is the belt-and-suspenders fallback.
+	 */
+	env_set("mmcboot", "boota");
 
 	return 0;
 }
@@ -580,7 +605,14 @@ static iomux_v3_cfg_t const gt9_pads[] = {
 	IMX8MM_PAD_GPIO1_IO09_GPIO1_IO9 | MUX_PAD_CTRL(GT9_PAD_CTRL),
 };
 
-static void gt9271_reset(void)
+/*
+ * int_high selects the latched I2C address via the INT level at reset-release:
+ *   1 -> 0x14  (what bootsel polls during the gesture window)
+ *   0 -> 0x5d  (the GT9271 power-on default; what the Linux DT expects, and the
+ *               DT has NO reset-gpios so the OS can't re-address it). osprep
+ *               re-latches 0x5d at OS handoff so touch works in the booted OS.
+ */
+static void gt9271_reset(int int_high)
 {
 	imx_iomux_v3_setup_multiple_pads(gt9_pads, ARRAY_SIZE(gt9_pads));
 	gpio_request(GT9_RST_GPIO, "gt9_rst");
@@ -593,8 +625,8 @@ static void gt9271_reset(void)
 	 */
 	gpio_direction_output(GT9_RST_GPIO, 0);	/* assert reset (active-low) */
 	mdelay(20);				/* hold in reset (GTP: 20 ms) */
-	gpio_direction_output(GT9_INT_GPIO, 1);	/* INT HIGH @reset -> addr 0x14
-						 * (low would select 0x5d) */
+	gpio_direction_output(GT9_INT_GPIO, int_high);	/* INT @reset latches addr:
+						 * HIGH(1)=0x14, LOW(0)=0x5d */
 	udelay(2000);				/* GTP: 2 ms before reset release */
 	gpio_set_value(GT9_RST_GPIO, 1);	/* deassert reset (addr latched) */
 	mdelay(6);				/* GTP: 6 ms */
@@ -693,8 +725,14 @@ static int gt9271_finger_count(void)
 				mdelay(GESTURE_SAMPLE_MS);
 			}
 			if (best >= 0) {
-				printf("gesture: GT9271 on i2c%d@0x%02x\n",
-				       busnum, addrs[ai]);
+				/* announce the controller once, not on every poll
+				 * (bootsel calls this ~100x across its window). */
+				static bool gt_announced;
+				if (!gt_announced) {
+					printf("gesture: GT9271 on i2c%d@0x%02x\n",
+					       busnum, addrs[ai]);
+					gt_announced = true;
+				}
 				return best;
 			}
 		}
@@ -707,7 +745,7 @@ static int do_gesture(struct cmd_tbl *cmdtp, int flag, int argc,
 {
 	int n;
 
-	gt9271_reset();			/* bring up @0x14 */
+	gt9271_reset(1);		/* bring up @0x14 for gesture polling */
 	gt9271_send_cfg();		/* push stock cfg -> start scanning */
 	n = gt9271_finger_count();
 
@@ -726,8 +764,10 @@ static int do_gesture(struct cmd_tbl *cmdtp, int flag, int argc,
 		return 0;
 	}
 	if (n == 4) {
-		printf("local eMMC (skip net)\n");
-		env_set("skip_net", "1");
+		printf("fastboot (web provisioner)\n");
+		/* Path B: launch the fastboot gadget the WebUSB tool drives.
+		 * Blocks until the host sends `fastboot reboot`. */
+		run_command("fastboot usb 0", 0);
 		return 0;
 	}
 	printf("normal bootcmd\n");
@@ -736,7 +776,7 @@ static int do_gesture(struct cmd_tbl *cmdtp, int flag, int argc,
 }
 
 U_BOOT_CMD(gesture, 1, 0, do_gesture,
-	   "TC8 GT9271 touch boot-selector (5=SDP, 4=eMMC, else normal)",
+	   "TC8 GT9271 touch boot-selector (5=SDP, 4=fastboot, else normal)",
 	   "");
 
 /*
@@ -821,44 +861,76 @@ U_BOOT_CMD(vtest, 2, 0, do_vtest,
 	   "[loops]");
 
 /*
+ * --- OS handoff prep: quiesce the panel + reset touch before booting -------
+ * Called from bootcmd right before the OS boots. (1) Clear the panel to black
+ * so the OS doesn't inherit the bootsel logo / show garbage while its DRM
+ * driver re-inits. (2) Reset the GT9271 to a clean post-power-on state (addr
+ * 0x14) so the OS touch driver starts from a known reset rather than our
+ * scanning cfg (fixes intermittent touch in the booted OS).
+ */
+static int do_osprep(struct cmd_tbl *cmdtp, int flag, int argc,
+		     char *const argv[])
+{
+	struct udevice *vid;
+
+	if (!uclass_first_device_err(UCLASS_VIDEO, &vid)) {
+		struct video_priv *p = dev_get_uclass_priv(vid);
+
+		vt_fill(p, 0x000000);		/* paint a black frame... */
+		video_sync(vid, true);
+		/*
+		 * ...then STOP the eLCDIF scan-out (HW_LCDIF_CTRL bit0 RUN, cleared
+		 * atomically via HW_LCDIF_CTRL_CLR @ base+0x08). The kernel overwrites
+		 * the framebuffer DRAM during boot; if the LCDIF keeps scanning that
+		 * region the panel shows garbage until the DRM driver re-inits. Freezing
+		 * on the black frame above eliminates the u-boot->Linux transition garble.
+		 */
+		writel(BIT(0), (void __iomem *)(ulong)(0x32e00000 + 0x08));
+	}
+	/*
+	 * Re-latch the GT9271 to 0x5d — its power-on default and the address the
+	 * Linux DT (touchscreen@5d, NO reset-gpios) expects. bootsel latched 0x14
+	 * for gesture polling; without this the OS would talk to an empty 0x5d and
+	 * touch would be dead (worked before stage-2 = chip was still at 0x5d).
+	 */
+	gt9271_reset(0);
+	return 0;
+}
+U_BOOT_CMD(osprep, 1, 0, do_osprep,
+	   "TC8: quiesce panel + reset GT9271 touch before OS handoff", "");
+
+/*
  * --- F1+F2 boot-UX: `bootsel` ---------------------------------------------
  * Panel up -> black -> U-Boot logo (submarine) centered -> poll GT9271 for
  * BOOTSEL_WIN_MS -> on a finger-mode, swap to that mode's icon centered,
  * hold briefly, then perform the action. No gesture -> clear -> fall
  * through to the normal bootcmd chain.
  *
- * The 4 BMPs (256x256, 24bpp, ~196 KB each) are too big to embed without
- * blowing past the chainload `mmc read` window, so they live on eMMC in
- * the RESERVED pre-partition gap (LBA 0x4000-0x8000: post-HAB, post-env,
- * BELOW the first flat-FW GPT partition `kernel`@0x8000 — NOT kernel_bak,
- * which is the load-bearing rollback-kernel partition). Stage-2
- * `u-boot.bin` = LBA 0x4000 (chainload `mmc read .. 0x4000 0x830`); the
- * BMP blob = LBA 0x5000, 256 KB slots, mmc-read into ${BOOTSEL_BMP_ADDR}
- * then `bmp display`d. Layout (eMMC dev 0, blocks), 256 KB slots:
- *   logo 0x5000  m2_emmc 0x5200  m3_net 0x5400  m4_ums 0x5600
- *   m5_sdp 0x5800   (blob 0x5000..0x5A00; each 0x181 blk >= 196662)
- * Persistent "last selection" state = 1 sector @ LBA 0x5C00 (magic
- * "BSEL" + mode byte) — NOT the u-boot env (would clobber the stock
- * chainload bootcmd). All within the reserved gap; flat GPT first
- * partition MUST stay >= 0x8000; installer must not reclaim 0x4000-
- * 0x8000.
+ * SELF-CONTAINED LOGOS (2026-06-27): the 5 BMPs (256x256, 24bpp, ~192 KB each)
+ * are EMBEDDED in the binary as const arrays (tc8_logos.h) and `bmp_display`d
+ * straight from .rodata — NO eMMC blob, NO partition/slot dependency. This grows
+ * the stage-2 binary by ~960 KB (~1 MB -> ~2 MB); the chainload `mmc read` length
+ * + boot1 capacity must cover it (boot1 is typically 4 MiB).
+ * The ONLY remaining eMMC bootsel touch is the 1-sector "last selection" sticky
+ * state @ LBA 0x4C00 (magic "BSEL" + mode byte). If full zero-eMMC self-
+ * containment is wanted, move that to the stage-2 env or drop the sticky default.
+ * NB: stage-2 `u-boot.bin` itself lives in the eMMC boot1 HW partition.
  */
 #define BOOTSEL_WIN_MS		20000	/* gesture window at the logo
 					 * (20 s for unhurried bench test;
 					 * dial back toward ~4 s for prod) */
 #define BOOTSEL_HOLD_MS		1500	/* how long the mode icon shows */
-#define BOOTSEL_BMP_ADDR	0x50000000UL
-#define MMC_LOGO	"mmc read 0x50000000 0x5000 0x181"
-#define MMC_EMMC	"mmc read 0x50000000 0x5200 0x181"	/* 2: eMMC boot */
-#define MMC_NET		"mmc read 0x50000000 0x5400 0x181"	/* 3: netboot  */
-#define MMC_UMS		"mmc read 0x50000000 0x5600 0x181"	/* 4: eMMC-UMS */
-#define MMC_SDP		"mmc read 0x50000000 0x5800 0x181"	/* 5: SDP/UUU  */
+/* Bootsel logos are EMBEDDED in the binary (self-contained — no eMMC blob,
+ * no partition/slot dependency). Arrays: ublogo_bmp / m2_emmc_bmp / m3_net_bmp
+ * / m4_ums_bmp / m5_sdp_bmp. ~192 KB each, 256x256 24bpp. */
+#include "tc8_logos.h"
 
-/* Persistent last-selection ("sticky default") — 1 sector @ LBA 0x5C00. */
-#define BSEL_STATE_LBA		0x5c00
+/* Persistent last-selection ("sticky default") — 1 sector @ LBA 0x4C00
+ * (within dtbo_a, just past the BMP blob; see layout note above). */
+#define BSEL_STATE_LBA		0x4c00
 #define BSEL_SCRATCH		0x50200000UL
-#define BSEL_RD	"mmc dev 0; mmc read 0x50200000 0x5c00 1"
-#define BSEL_WR	"mmc dev 0; mmc write 0x50200000 0x5c00 1"
+#define BSEL_RD	"mmc dev 0; mmc read 0x50200000 0x4c00 1"
+#define BSEL_WR	"mmc dev 0; mmc write 0x50200000 0x4c00 1"
 
 /* return last sticky mode (2=emmc | 3=net) or 0 if unset/invalid */
 static int bsel_load(void)
@@ -886,7 +958,7 @@ static void bsel_save(int mode)
 }
 
 static void bootsel_show(struct video_priv *p, struct udevice *vid,
-			 const char *mmccmd)
+			 const unsigned char *bmp)
 {
 	int x = ((int)p->xsize - 256) / 2;
 	int y = ((int)p->ysize - 256) / 2;
@@ -898,15 +970,11 @@ static void bootsel_show(struct video_priv *p, struct udevice *vid,
 	vt_fill(p, 0x000000);			/* black background */
 	video_sync(vid, true);
 	/*
-	 * Our stage-2 DTS aliases mmc0=&usdhc3 (the eMMC) and enables only
-	 * usdhc3, so the eMMC is `mmc dev 0` here. (Stock u-boot numbered it
-	 * mmc1; the chainload `mmc read` ran under *stock*, not stage-2.)
+	 * Logos are EMBEDDED in the binary (self-contained, no eMMC blob/slot).
+	 * bmp_display reads the BMP straight from its .rodata address — no
+	 * `mmc read`, no dependency on any partition.
 	 */
-	if (run_command("mmc dev 0", 0) || run_command(mmccmd, 0)) {
-		printf("bootsel: eMMC BMP read failed (%s)\n", mmccmd);
-		return;
-	}
-	if (bmp_display(BOOTSEL_BMP_ADDR, x, y))
+	if (bmp_display((ulong)bmp, x, y))
 		printf("bootsel: bmp_display failed\n");
 	video_sync(vid, true);
 }
@@ -926,11 +994,11 @@ static int do_bootsel(struct cmd_tbl *cmdtp, int flag, int argc,
 	}
 	p = dev_get_uclass_priv(vid);
 
-	bootsel_show(p, vid, MMC_LOGO);
-	gt9271_reset();				/* once: bring up @0x14 */
+	bootsel_show(p, vid, ublogo_bmp);
+	gt9271_reset(1);			/* once: bring up @0x14 for polling */
 	gt9271_send_cfg();			/* once: stock cfg -> scanning */
 	printf("bootsel: U-Boot logo; %d ms gesture window "
-	       "(2=eMMC 3=net 4=UMS 5=SDP)\n", BOOTSEL_WIN_MS);
+	       "(2=eMMC 3=net 4=fastboot 5=SDP)\n", BOOTSEL_WIN_MS);
 
 	t0 = get_timer(0);
 	while (get_timer(t0) < BOOTSEL_WIN_MS) {
@@ -971,27 +1039,32 @@ static int do_bootsel(struct cmd_tbl *cmdtp, int flag, int argc,
 	}
 
 	/* Maintenance modes (4/5): one-shot, NOT made the sticky default
-	 * (a sticky UMS/SDP would loop the device into a maintenance state
+	 * (a sticky fastboot/SDP would loop the device into a maintenance state
 	 * and look bricked). They block until the host is done. */
 	if (n >= 5) {
 		printf("bootsel: 5 fingers -> SDP/UUU (hard escape)\n");
-		bootsel_show(p, vid, MMC_SDP);
+		bootsel_show(p, vid, m5_sdp_bmp);
 		mdelay(BOOTSEL_HOLD_MS);
 		run_command("sdp 0", 0);	/* uuu drives this; blocks */
 		return 0;
 	}
 	if (n == 4) {
-		printf("bootsel: 4 fingers -> eMMC as USB mass storage\n");
-		bootsel_show(p, vid, MMC_UMS);
+		/* 4 fingers -> fastboot gadget = the web provisioner's entry
+		 * (Path B). Repurposed from UMS 2026-06-27: the WebUSB tool
+		 * speaks fastboot, not mass-storage. `fastboot usb 0` blocks
+		 * serving the gadget until the host sends `fastboot reboot`.
+		 * (m4 BMP icon retained; now means "fastboot/provision".) */
+		printf("bootsel: 4 fingers -> fastboot (web provisioner)\n");
+		bootsel_show(p, vid, m4_ums_bmp);
 		mdelay(BOOTSEL_HOLD_MS);
-		run_command("ums 0 mmc 0", 0);	/* host mounts eMMC; blocks */
+		run_command("fastboot usb 0", 0);	/* host provisions; blocks */
 		return 0;
 	}
 
 	/* Boot modes (2/3): persisted as the new sticky default. */
 	if (n == 3) {
 		printf("bootsel: 3 fingers -> DHCP-66 netboot (sticky)\n");
-		bootsel_show(p, vid, MMC_NET);
+		bootsel_show(p, vid, m3_net_bmp);
 		mdelay(BOOTSEL_HOLD_MS);
 		bsel_save(3);
 		env_set("skip_net", NULL);	/* -> run dhcp66_boot */
@@ -999,7 +1072,7 @@ static int do_bootsel(struct cmd_tbl *cmdtp, int flag, int argc,
 	}
 	if (n == 2) {
 		printf("bootsel: 2 fingers -> eMMC boot (sticky)\n");
-		bootsel_show(p, vid, MMC_EMMC);
+		bootsel_show(p, vid, m2_emmc_bmp);
 		mdelay(BOOTSEL_HOLD_MS);
 		bsel_save(2);
 		env_set("skip_net", "1");	/* skip dhcp66 -> mmcboot */
@@ -1012,11 +1085,11 @@ static int do_bootsel(struct cmd_tbl *cmdtp, int flag, int argc,
 
 		if (last == 3) {
 			printf("bootsel: no gesture -> last=netboot\n");
-			bootsel_show(p, vid, MMC_NET);
+			bootsel_show(p, vid, m3_net_bmp);
 			env_set("skip_net", NULL);
 		} else {
 			printf("bootsel: no gesture -> last=eMMC (default)\n");
-			bootsel_show(p, vid, MMC_EMMC);
+			bootsel_show(p, vid, m2_emmc_bmp);
 			env_set("skip_net", "1");
 		}
 		mdelay(BOOTSEL_HOLD_MS);

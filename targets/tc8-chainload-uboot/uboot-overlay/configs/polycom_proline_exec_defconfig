@@ -28,7 +28,7 @@ CONFIG_FIT=y
 CONFIG_FIT_EXTERNAL_OFFSET=0x3000
 CONFIG_SPL_LOAD_FIT=y
 CONFIG_DISTRO_DEFAULTS=y
-CONFIG_BOOTCOMMAND="run gesture_sel;run dhcp66_boot;run mmcboot"
+CONFIG_BOOTCOMMAND="run gesture_sel;run dhcp66_boot;run mmcboot;echo '*** no bootable OS - entering fastboot for provisioning ***';fastboot usb 0"
 CONFIG_BOOTDELAY=3
 CONFIG_OF_SYSTEM_SETUP=y
 CONFIG_SYS_CBSIZE=2048
@@ -110,6 +110,17 @@ CONFIG_DFU_MMC=y
 CONFIG_DFU_RAM=y
 CONFIG_UDP_FUNCTION_FASTBOOT=y
 CONFIG_MXC_GPIO=y
+# Boot the OS as an Android boot.img v0 from boot_a via `bootm` (AVB-free —
+# no boota/LIBAVB). Likely already on via `default y if FASTBOOT`; explicit here.
+CONFIG_ANDROID_BOOT_IMAGE=y
+# UNLOCKED boota: re-enable the NXP FSL Android boot path so ONE established
+# method boots stock (slot A) + our Linux (slot B). AVB runs UNLOCKED (unlock stub
+# in overlay fastboot_lock_unlock.c) so unsigned images boot. ANDROID_SUPPORT is
+# the master switch (selects FSL_FASTBOOT/AVB_SUPPORT/LIBAVB/FASTBOOT_LOCK/...).
+CONFIG_ANDROID_SUPPORT=y
+CONFIG_CMD_BOOTA=y
+CONFIG_ANDROID_AB_SUPPORT=y
+CONFIG_SHA256=y
 CONFIG_FASTBOOT=y
 CONFIG_USB_FUNCTION_FASTBOOT=y
 CONFIG_CMD_FASTBOOT=y
@@ -184,6 +195,11 @@ CONFIG_USB_GADGET_PRODUCT_NUM=0x0152
 CONFIG_CI_UDC=y
 CONFIG_SDP_LOADADDR=0x40400000
 CONFIG_USB_GADGET_DOWNLOAD=y
+# Provisioning M1 (2026-06-27): turn on the existing MS-OS-1.0 WinUSB binding in
+# f_fastboot.c (use_os_string + compat-ID) so Windows/Chrome WebUSB auto-binds.
+# Proven path: stock fastboot uses the same mechanism (osvc=01 40). Single var:
+# keep VID/PID 0x1fc9:0x0152; revisit bcdDevice/PID only if bench osvc stays 00.
+CONFIG_USB_GADGET_OS_DESCRIPTORS=y
 CONFIG_USB_MAX_CONTROLLER_COUNT=2
 CONFIG_IMX_BOOTAUX=y
 CONFIG_USB_TCPC=y
