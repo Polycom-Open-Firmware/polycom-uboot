@@ -107,7 +107,7 @@ binding until changed *here*. Linked from repo `CLAUDE.md` doc tree.
 >      `enable_backlight` (mirrors u-boot `simple_panel.c`). THIS was
 >      the "clean path but totally dark" final piece — matches the
 >      documented C60 rm67191/PWM4 root cause.
->   All in `targets/tc8-proline_exec/uboot-overlay/` (DTS +
+>   All in `targets/tc8-chainload-uboot/uboot-overlay/` (DTS +
 >   raydium-rm67191.c). Net: **F1/F2/F3-capable fully-custom u-boot is
 >   delivered on the HAB-closed TC8 as a chainloaded stage-2.**
 > - **[P1] ⚠ SAFETY — TC8/C60 share a cloned identity.** The C60
@@ -136,7 +136,7 @@ binding until changed *here*. Linked from repo `CLAUDE.md` doc tree.
 > `mmcboot` (raw-read eMMC) → `booti` → Linux 6.6 → samsung-dsim OK →
 > Debian 12 bookworm → login getty**. Three independent post-bring-up
 > bugs were root-caused (deterministic, diag1–7 single-WS captures) and
-> fixed — all KEPT in `targets/tc8-proline_exec/uboot-overlay/`:
+> fixed — all KEPT in `targets/tc8-chainload-uboot/uboot-overlay/`:
 > - **[P1] WDT starvation in bootsel.** The F1 gesture poll-loop +
 >   2 s settle-loop never serviced the i.MX WDOG (stock/ATF armed it)
 >   → SoC reset mid-window → infinite re-chainload (looked like the
@@ -175,7 +175,7 @@ binding until changed *here*. Linked from repo `CLAUDE.md` doc tree.
 >   baseline `=y` to keep the experiment single-variable.
 >
 > Final shippable stage-2 = `vendored/uboot-imx/u-boot.bin` from
-> `./scripts/build.sh tc8-proline_exec` (md5 `aa4645a3` at proof
+> `./scripts/build.sh tc8-chainload-uboot` (md5 `aa4645a3` at proof
 > time), re-staged to eMMC LBA `0x4000`. Net: **TC8 #14 (auto-persist
 > chainload + end-to-end OS boot) is DELIVERED and PROVEN.** Open
 > follow-ups (separate, pre-existing): kernel-side ethernet
@@ -214,6 +214,62 @@ binding until changed *here*. Linked from repo `CLAUDE.md` doc tree.
 > serverip). This is the **u-boot** path; the *kernel*-side
 > RTL8363NB-VB (DSA/realtek-mdio, FEC-MDIO re-init) remains a separate
 > pre-existing open blocker.
+>
+> ### ✅ 2026-06-28 — PIVOT: boot method = UNLOCKED `boota` (D1 SUPERSEDED)
+> The original D1 ("strip AVB+Android entirely → plain `booti`/FIT; no
+> boota, no vbmeta") is **REVERSED.** Stage-2 now boots via the **NXP FSL
+> Android `boota` path run UNLOCKED**, so a *single* established method
+> boots **unsigned** Android-format images — both stock Android and our
+> Linux. See commit `529ffc9` and `targets/tc8-chainload-uboot/
+> uboot-overlay/drivers/fastboot/fb_fsl/`. Why the change: `boota` already
+> does BCB slot-select + image unpack + DTB/DTBO + cmdline, the C60 dual-boot
+> already produces Android slot images, and forcing AVB *unlocked* sidesteps
+> signing entirely — simpler than maintaining a parallel `booti`/FIT path.
+> - **Unlock stub:** `fb_fsl/fastboot_lock_unlock.c`
+>   `fastboot_get_lock_stat()` → `FASTBOOT_UNLOCK` (always unlocked → AVB
+>   tolerates the signature mismatch and boots; also dodges the
+>   fbmisc-read-error → LOCK trap). This is what makes unsigned boot legal
+>   to the FSL path.
+> - **5 genuine NXP boota fixes** for legacy v0 images (modern v3/v4 never
+>   exercise them), all in the vendored overlays:
+>   1. `fb_fsl_boot.c`: **inverted v0 magic check** —
+>      `is_android_boot_image_header()` returns TRUE for a *valid* header,
+>      but `do_boota` treated TRUE as "bad magic" and failed every v0 image.
+>   2. `fb_fsl_boot.c`: **always copy the boot.img ramdisk** —
+>      `SYSTEM_RAMDISK_SUPPORT` skipped the copy yet still set
+>      `ramdisk_size`, handing `booti` a stale ramdisk (→ init -13).
+>   3. `fb_fsl_boot.c`: place `androidboot.force_normal_boot=1` **ahead of**
+>      the long `dm=`/avb cmdline so it stays within the cmdline length cap.
+>   4. `mach-imx/Kconfig`: **drop `ANDROID_AB_SUPPORT`'s force-select of
+>      `SYSTEM_RAMDISK_SUPPORT`** (our images are not system-as-root).
+>   5. (the unlock stub above — the 5th overlay file.)
+> - **Image model:** our Linux ships as an Android **slot image** —
+>   `boot.img` + `dtbo` (dtb inside a DTBO container) + `vbmeta`
+>   (AVB `--algorithm NONE`), flashed to a GPT slot (A = replace stock, or
+>   B). rootfs → `userdata` (Android sparse). **Stock GPT is kept** — we do
+>   NOT repartition / `gpt write`; we flash into existing slots.
+> - **defconfig** (`polycom_proline_exec_defconfig`): now KEEPS
+>   `ANDROID_SUPPORT`, `CMD_BOOTA`, `ANDROID_AB_SUPPORT`, `SHA256`
+>   (re-enabled — see §3/§6). `mmcboot` env = **`boota`** (active slot via
+>   the `misc` bootctrl); `board_late_init` re-asserts our gesture/logo
+>   `bootcmd` because `imx8mm_evk_android.h` `#undef`s `CONFIG_BOOTCOMMAND`.
+> - **Gesture mapping UPDATED:** `do_gesture`/`do_bootsel` now map
+>   **4 fingers → fastboot** (`fastboot usb 0`, the web provisioner's entry),
+>   **5 → SDP/UUU**, none → normal `bootcmd`. (The old **4 → eMMC UMS** mode
+>   is GONE.)
+> - **`osprep` at OS handoff** (run from `bootcmd` before the OS boots):
+>   clears the panel to black + clears `HW_LCDIF_CTRL.RUN` to **stop the
+>   eLCDIF scan-out** (kills u-boot→Linux transition garbage), and
+>   **re-latches the GT9271 to 0x5d** (bootsel re-latched it to 0x14 for
+>   gesture polling; the Linux DT is `touchscreen@5d` with no `reset-gpios`,
+>   so the OS can't re-address it → osprep restores 0x5d so booted-OS touch
+>   works). Commits `bca0cee`, `1b27955`, `cdaab96`.
+> - **⚠ Stock-via-boota was ABANDONED.** Unlocked `boota` reaches stock
+>   Android's init and runs first+second stage, but stock is **Android-9
+>   system-as-root + dm-verity** and loops in recovery — a separate effort.
+>   Our Linux slot has **none** of that (plain rootfs on `userdata`, no
+>   verity), so it boots cleanly. The unified path is real; only *stock's*
+>   completion is out of scope.
 
 ## 0. Goal & philosophy
 
@@ -228,10 +284,10 @@ the `targets/` + `uboot-overlay/` pattern already proven on C60.
 
 | # | Decision | Choice |
 |---|----------|--------|
-| D1 | AVB / boot-image | **Strip AVB+Android entirely → plain `booti`/FIT.** No boota, no vbmeta, no dm-verity gate. |
+| D1 | AVB / boot-image | **~~Strip AVB+Android entirely → plain `booti`/FIT~~ → SUPERSEDED 2026-06-28: boot via NXP FSL `boota` run UNLOCKED** (AVB forced `FASTBOOT_UNLOCK`) so one path boots **unsigned** Android-format slot images (stock Android + our Linux). Keep stock GPT; flash into existing slots. See the 2026-06-28 bench entry above and `529ffc9`. |
 | D2 | Persistence | **Flash to eMMC (persistent)** is the goal. Validate via SDP-RAM-load first; eMMC-flash is a later milestone. SDP-recovery copy stays untouchable. |
 | D3 | Console | **Always-open, no password.** Non-zero `bootdelay`, any-key interrupt, unconditional shell. |
-| D4 | Target focus | **TC8-first** (`tc8-proline_exec`). C60 stays the working reference; not lockstep. TC8 not yet in UUU — source work proceeds; on-device gated on user. |
+| D4 | Target focus | **TC8-first** (`tc8-chainload-uboot`). C60 stays the working reference; not lockstep. TC8 not yet in UUU — source work proceeds; on-device gated on user. |
 
 New feature requirements (same session):
 
@@ -244,41 +300,47 @@ New feature requirements (same session):
 ## 2. Boot decision flow (target `bootcmd`)
 
 ```
-power-on
-  └─ SPL: DDR, ATF(BL31), load u-boot
-       └─ u-boot pre-boot:
-            1. GESTURE SAMPLE (F1)  ── GT9xx I2C touch-count, debounced
+stock signed stage-1 (boot0)  ── persisted env bootcmd: mmc read boot1 → go
+  └─ chainloaded stage-2 (our U-Boot 2024.04, in eMMC boot1):
+       bootcmd = run gesture_sel; osprep; run dhcp66_boot; run mmcboot
+            1. GESTURE SAMPLE (F1)  ── GT9271 I2C touch-count, debounced
                  5 fingers → enter BootROM SDP (USB-download)  [hard escape]
-                 4 fingers → force local eMMC boot, skip net
-                 else      → continue
-            2. DHCP-66 (F3, unless 4-finger)
+                 4 fingers → fastboot gadget (web provisioner entry)
+                 else      → continue (skip_net unset)
+            2. osprep  ── clear panel + stop eLCDIF + re-latch GT9271 → 0x5d
+            3. DHCP-66 (F3, unless gesture skip)
                  dhcp; if ${serverip} && ${bootfile} → tftp → boot   ✦ wins
-            3. LOCAL BOOT
-                 distro_bootcmd → FIT/booti from eMMC (A or B, owner-picked)
-            4. FALLBACK
-                 boot menu on console; last resort = SDP re-entry
+            4. LOCAL BOOT
+                 mmcboot = `boota` (unlocked) — active GPT slot via the misc
+                 bootctrl: boot_<slot> + dtbo_<slot> + vbmeta_<slot> → booti
+            5. FALLBACK
+                 console; last resort = SDP re-entry
 ```
 
-Precedence: **gesture > DHCP-66 > local A/B > fallback/SDP.** Gesture is
-sampled before the network so a stuck/rogue DHCP can always be overridden
-by hand on a button-less chassis.
+Precedence: **gesture > DHCP-66 > local slot (boota) > fallback/SDP.**
+Gesture is sampled before the network so a stuck/rogue DHCP can always be
+overridden by hand on a button-less chassis.
 
 ## 3. Feature matrix (baseline vs. work)
 
 Legend: ⚙ = defconfig/env only · ✎ = new code/DTS · ✓ = already in base
 overlay (C60-proven)
 
-### Lock / verification removal — D1
+### Lock / verification removal — D1 (REVISED 2026-06-28: unlocked `boota`)
+The original "strip AVB+Android" rows are superseded. We now KEEP the FSL
+Android stack and **force it UNLOCKED** instead of removing it — one path
+boots unsigned images. (Crossed-out rows = the old plan, for history.)
 | Item | How | St |
 |------|-----|----|
-| No AVB/vbmeta/dm-verity gate | defconfig: drop `AVB_SUPPORT,LIBAVB` | ⚙ |
-| No Android image / boota | drop `ANDROID_SUPPORT,ANDROID_*,ANDROID_BOOT_IMAGE,CMD_BOOTA` | ⚙ |
-| No BCB / misc A-B ping-pong | drop `BCB_SUPPORT`; owner-picked slot env | ⚙✎ |
-| No fastboot lock-state gate | drop `FASTBOOT_LOCK` (kills "device is locked") | ⚙ |
-| No anti-rollback | falls out with AVB removal | ⚙ |
+| ~~No AVB/vbmeta/dm-verity gate~~ → **AVB present but forced UNLOCKED** | `fastboot_get_lock_stat()→FASTBOOT_UNLOCK` stub; `vbmeta --algorithm NONE`; our rootfs has no dm-verity | ✎ |
+| ~~No Android image / boota~~ → **KEEP `boota`** (unlocked) | defconfig KEEPS `ANDROID_SUPPORT,ANDROID_AB_SUPPORT,CMD_BOOTA,SHA256`; `mmcboot=boota` | ⚙✎ |
+| BCB / misc A-B slot select | KEPT — `boota` reads the active slot from `misc` bootctrl; `fastboot set_active` flips it | ⚙ |
+| ~~No fastboot lock-state gate~~ → unlock stub IS the gate, pinned to UNLOCK | `fb_fsl/fastboot_lock_unlock.c` | ✎ |
+| No anti-rollback | unlocked AVB tolerates the signature/rollback mismatch and boots | ✎ |
 | No Polycom `is_usb_boot`→fastboot trap | clean port doesn't have it; assert in bootcmd | ✓ |
 | Env RW, `saveenv` works | `ENV_OVERWRITE=y`, `ENV_IS_IN_MMC` @0x700000 | ✓ |
-| HABv4 | left **open** (unsigned SPL loads via SDP); we don't close it, don't add our own enforced signing (opt-in only, default off) | ✓ |
+| Keep stock GPT (no repartition) | flash our Linux into an existing slot (A or B) + `userdata`; never `gpt write` | ✎ |
+| HABv4 (C60) | left **open** (unsigned SPL loads via SDP). On TC8 HAB is **closed** → we don't touch stage-1; we chainload an unsigned stage-2 from boot1 instead | ✓ |
 
 ### Owner access — D3
 | Item | How | St |
@@ -337,7 +399,9 @@ chainloaded stage-2 → rotated submarine BMP on black (no VIDEO_LOGO
 corner) → 20 s window (bench; dial → ~4 s for prod) → GT9271 gesture →
 **~2 s max-count settle** (catches staggered landing: log shows
 `detected(3) → settled on 4`) → swap to that mode's rotated icon →
-action. Mode actions, all wired in `do_bootsel`:
+action. Mode actions, all wired in `do_bootsel` (mapping as of 2026-05-16;
+**SUPERSEDED 2026-06-28 → 5=SDP, 4=fastboot, none=normal**; the 4→UMS mode
+below is GONE — fastboot now drives provisioning over the shared gadget):
 - **3 → DHCP-66 netboot** (`skip_net` clear → `dhcp66_boot`); needs F3.
 - **4 → eMMC as UMS** — `run_command("ums 0 mmc 0")`. **CONFIRMED:**
   host enumerates our gadget `1fc9:0152` on the **TC8 path 3-2.1**
@@ -407,8 +471,8 @@ blocker for the `mmcboot`→Linux end-to-end validation.
 | Item | How | St |
 |------|-----|----|
 | Minimal GT9xx I2C reader | new board hook: I2C@0x14 bus-1, read status reg → buffer-status + touch-count nibble; rst/irq GPIO bring-up; ~150 ms debounce window | ✎ |
-| Map count→action | 5→`run sdp_enter`; 4→`run emmc_only`; else continue | ✎ |
-| Serial-confirmed, no UI | prints `gesture: N fingers → <action>` | ✎ |
+| Map count→action | **5→`sdp 0` (SDP/UUU); 4→`fastboot usb 0` (web provisioner); else normal** (2026-06-28; was 4→UMS) | ✎ |
+| Serial-confirmed, no UI | prints `gesture: N finger(s) → <action>` | ✎ |
 
 ### F3 DHCP-66 netboot
 | Item | How | St |
@@ -454,13 +518,17 @@ PMS/LCDIF clock values back into `re/C60_DISPLAY_SPEC.md`.
 
 ## 6. Implementation map
 
-- **Defconfig** `targets/tc8-proline_exec/uboot-overlay/configs/polycom_proline_exec_defconfig`
-  — fork C60's; **remove**: `ANDROID_SUPPORT, ANDROID_AB_SUPPORT,
-  ANDROID_RECOVERY, ANDROID_DYNAMIC_PARTITION, ANDROID_BOOT_IMAGE,
-  AVB_SUPPORT, LIBAVB, BCB_SUPPORT, CMD_BOOTA, FASTBOOT_LOCK`; **add**:
-  `BOOTDELAY=3`; **keep**: FIT/DISTRO/VIDEO/SEC_DSI/RAYDIUM/SPLASH/
-  CI_UDC/CMD_DHCP/CMD_TFTPBOOT/I2C/USDHC/FEC.
-- **DTS** `targets/tc8-proline_exec/uboot-overlay/arch/arm/dts/imx8mm-polycom-proline-exec.dts`
+- **Defconfig** `targets/tc8-chainload-uboot/uboot-overlay/configs/polycom_proline_exec_defconfig`
+  — fork C60's; **(REVISED 2026-06-28 for unlocked `boota` — D1 reversal)**
+  **keep/enable** the FSL Android stack: `ANDROID_SUPPORT,
+  ANDROID_AB_SUPPORT, CMD_BOOTA, AVB_SUPPORT, LIBAVB, SHA256` — AVB is left
+  in but forced UNLOCKED by the `fastboot_get_lock_stat()→FASTBOOT_UNLOCK`
+  overlay stub (so unsigned slot images boot); `USB_GADGET_OS_DESCRIPTORS=y`
+  (shared `f_fastboot` WinUSB gadget); **add**: `BOOTDELAY=3`; **also keep**:
+  FIT/DISTRO/VIDEO/SEC_DSI/RAYDIUM/SPLASH/CI_UDC/CMD_DHCP/CMD_TFTPBOOT/I2C/
+  USDHC/FEC. (Original plan was to *strip* ANDROID/AVB/BCB/BOOTA and run
+  plain `booti`/FIT — superseded; see the 2026-06-28 bench entry.)
+- **DTS** `targets/tc8-chainload-uboot/uboot-overlay/arch/arm/dts/imx8mm-polycom-proline-exec.dts`
   — mirror C60 minimal DTS + add: GT9xx `i2c@0x14` (bus-1) w/ rst+irq
   GPIOs; panel/DSIM/PWM4-backlight/reset-GPIO2_IO05; correct console
   UART (confirm from stock TC8 DTB); PMIC; `usbg1` gadget; eMMC USDHC.
@@ -477,7 +545,7 @@ PMS/LCDIF clock values back into `re/C60_DISPLAY_SPEC.md`.
 | Target | DDR | defconfig | u-boot DTS | gesture | dhcp66 | splash | on-device |
 |--------|-----|-----------|-----------|---------|--------|--------|-----------|
 | c60-kepler_proto1 | ✓ | boota+AVB (pre-unlock) | ✓ | — | — | drivers on | uuu dual-boot works |
-| tc8-proline_exec | ✓ (symlink) | **todo** | **todo** | **todo** | **todo** | staged | **gated on UUU** |
+| tc8-chainload-uboot | ✓ (symlink) | ✓ (unlocked boota) | ✓ | ✓ | ✓ | ✓ (panel up) | **DELIVERED + proven on HW** |
 
 C60 will be migrated to the unlocked (D1) defconfig *after* TC8 proves it,
 to avoid regressing the working reference.
