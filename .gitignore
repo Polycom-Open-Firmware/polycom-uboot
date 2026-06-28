@@ -9,3 +9,6 @@ vendored/imx-mkimage/
 vendored/
 out/
 mkimage_imx8
+
+# local secrets
+.secrets
