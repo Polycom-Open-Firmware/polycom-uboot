@@ -605,7 +605,14 @@ static iomux_v3_cfg_t const gt9_pads[] = {
 	IMX8MM_PAD_GPIO1_IO09_GPIO1_IO9 | MUX_PAD_CTRL(GT9_PAD_CTRL),
 };
 
-static void gt9271_reset(void)
+/*
+ * int_high selects the latched I2C address via the INT level at reset-release:
+ *   1 -> 0x14  (what bootsel polls during the gesture window)
+ *   0 -> 0x5d  (the GT9271 power-on default; what the Linux DT expects, and the
+ *               DT has NO reset-gpios so the OS can't re-address it). osprep
+ *               re-latches 0x5d at OS handoff so touch works in the booted OS.
+ */
+static void gt9271_reset(int int_high)
 {
 	imx_iomux_v3_setup_multiple_pads(gt9_pads, ARRAY_SIZE(gt9_pads));
 	gpio_request(GT9_RST_GPIO, "gt9_rst");
@@ -618,8 +625,8 @@ static void gt9271_reset(void)
 	 */
 	gpio_direction_output(GT9_RST_GPIO, 0);	/* assert reset (active-low) */
 	mdelay(20);				/* hold in reset (GTP: 20 ms) */
-	gpio_direction_output(GT9_INT_GPIO, 1);	/* INT HIGH @reset -> addr 0x14
-						 * (low would select 0x5d) */
+	gpio_direction_output(GT9_INT_GPIO, int_high);	/* INT @reset latches addr:
+						 * HIGH(1)=0x14, LOW(0)=0x5d */
 	udelay(2000);				/* GTP: 2 ms before reset release */
 	gpio_set_value(GT9_RST_GPIO, 1);	/* deassert reset (addr latched) */
 	mdelay(6);				/* GTP: 6 ms */
@@ -738,7 +745,7 @@ static int do_gesture(struct cmd_tbl *cmdtp, int flag, int argc,
 {
 	int n;
 
-	gt9271_reset();			/* bring up @0x14 */
+	gt9271_reset(1);		/* bring up @0x14 for gesture polling */
 	gt9271_send_cfg();		/* push stock cfg -> start scanning */
 	n = gt9271_finger_count();
 
@@ -872,7 +879,13 @@ static int do_osprep(struct cmd_tbl *cmdtp, int flag, int argc,
 		vt_fill(p, 0x000000);		/* black -> no logo bleed-through */
 		video_sync(vid, true);
 	}
-	gt9271_reset();				/* clean touch reset for the OS */
+	/*
+	 * Re-latch the GT9271 to 0x5d — its power-on default and the address the
+	 * Linux DT (touchscreen@5d, NO reset-gpios) expects. bootsel latched 0x14
+	 * for gesture polling; without this the OS would talk to an empty 0x5d and
+	 * touch would be dead (worked before stage-2 = chip was still at 0x5d).
+	 */
+	gt9271_reset(0);
 	return 0;
 }
 U_BOOT_CMD(osprep, 1, 0, do_osprep,
@@ -974,7 +987,7 @@ static int do_bootsel(struct cmd_tbl *cmdtp, int flag, int argc,
 	p = dev_get_uclass_priv(vid);
 
 	bootsel_show(p, vid, ublogo_bmp);
-	gt9271_reset();				/* once: bring up @0x14 */
+	gt9271_reset(1);			/* once: bring up @0x14 for polling */
 	gt9271_send_cfg();			/* once: stock cfg -> scanning */
 	printf("bootsel: U-Boot logo; %d ms gesture window "
 	       "(2=eMMC 3=net 4=fastboot 5=SDP)\n", BOOTSEL_WIN_MS);
