@@ -51,7 +51,7 @@ binding until changed *here*. Linked from repo `CLAUDE.md` doc tree.
 > Build model: u-boot-proper **without SPL/DDR** (stock SPL already did
 > DRAM/clocks/PMIC); load to a non-colliding DRAM addr (low, ~`0x40000000`
 > region; stock u-boot self-relocates high); env: `mmc read`/`tftp` →
-> `go`/`bootm`. Bench-iterate over the now-working slug-B serial console
+> `go`/`bootm`. Bench-iterate over the now-working probe-B serial console
 > (`tx16/rx17`). **Net: UNLOCK_SPEC is REVIVED for TC8 via chainload,
 > not by replacing stage-1.** §1–§7 features stand; only the *delivery*
 > changes (stage-2 chainload instead of SDP/eMMC stage-1 replace).
@@ -117,12 +117,12 @@ binding until changed *here*. Linked from repo `CLAUDE.md` doc tree.
 >   The ONLY authoritative discriminator is the **DT model string**
 >   (`/sys/firmware/devicetree/base/model`: TC8 = `… LCC PROTO`, C60 =
 >   `… Kepler …`). Any reflash MUST hard-gate on the DT model before dd.
->   slug-1 serial (`ws://192.168.10.123`) is physically the TC8 (C60 =
->   slug-2 `.95`) → use it to learn/confirm the TC8's IP.
+>   probe-1 serial (`ws://192.168.10.123`) is physically the TC8 (C60 =
+>   probe-2 `.95`) → use it to learn/confirm the TC8's IP.
 > - **Proven reflash+test recipe (C60-safe):** PoE cold-boot port 1 →
 >   poll SSH `.42`, **hard DT-model guard** → `dd u-boot.bin
 >   of=/dev/mmcblk2 bs=512 seek=131072 conv=fsync` (kernel_bak/p2
->   scratch, non-load-bearing) → catch stock over slug-1 →
+>   scratch, non-load-bearing) → catch stock over probe-1 →
 >   `mmc dev 1; mmc read 0x40200000 0x20000 0x830; dcache flush;
 >   icache off; dcache off; go 0x40200000`. Helpers:
 >   `/tmp/tc8_full.sh`, `/tmp/wsce2.py` (drafts).
