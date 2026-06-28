@@ -332,7 +332,7 @@ int board_ehci_usb_phy_mode(struct udevice *dev)
 
 /*
  * --- Polycom board flag --------------------------------------------------
- * We build per-target (tc8-proline_exec / c60-kepler_proto1) but share this
+ * We build per-target (tc8-chainload-uboot / c60-kepler_proto1) but share this
  * board file; gate board-specific bring-up on the DT compatible so the same
  * code generalizes. TC8 now; C60 later (add poly_is_c60()).
  */
@@ -495,7 +495,7 @@ int board_late_init(void)
 	/*
 	 * TC8 unlock F2: boot splash. NXP imx convention — a BMP preloaded
 	 * at ${splashimage} is auto-shown centered (${splashpos}) at video
-	 * init (CONFIG_SPLASH_SCREEN/_ALIGN). Asset: targets/tc8-proline_exec/
+	 * init (CONFIG_SPLASH_SCREEN/_ALIGN). Asset: targets/tc8-chainload-uboot/
 	 * splash.bmp (Colloid start-here, 360x360 24bpp). The load of that
 	 * BMP -> 0x50000000 is finalized on-device at #8 (panel is dark until
 	 * the DSIM PMS lock is proven — UNLOCK_SPEC.md §7b/§8).
@@ -507,18 +507,18 @@ int board_late_init(void)
 
 	/*
 	 * Stage-2-always-in-charge: on no gesture, bootsel falls through
-	 * `bootcmd = run gesture_sel; run dhcp66_boot; run mmcboot` to
-	 * `mmcboot` — the deterministic LOCAL OS boot. Raw-read the flat-FW
-	 * GPT `kernel`@LBA 0x8000 (48 MiB) + `dtb`@0x38000 into the stock
-	 * loadaddrs and booti. eMMC is `mmc dev 0` in stage-2 (DTS alias
-	 * mmc0=usdhc3). tc8_bootargs is finalised at OS-install (profiles/
-	 * emmc.env KERNEL_CMDLINE); this default is overridable via env.
+	 * `bootcmd = run gesture_sel; osprep; run dhcp66_boot; run mmcboot`
+	 * to `mmcboot` — the deterministic LOCAL OS boot. `mmcboot` is now
+	 * `boota`: it boots the active slot's Android image (boot_<slot> +
+	 * dtbo_<slot> + vbmeta_<slot>) via the unlocked NXP boota path. eMMC
+	 * is `mmc dev 0` in stage-2 (DTS alias mmc0=usdhc3). tc8_bootargs
+	 * below is the fallback cmdline for the dev-path bootm/booti only.
 	 */
 	/*
 	 * Default must match profiles/emmc.env KERNEL_CMDLINE so the
 	 * panel renders correctly (rotate=270 + fbcon=rotate:3 + cage -r
-	 * x 7 transform 7 = FLIPPED_270 — see tc8-kernel-patches 0001/
-	 * 0002/0006 + tc8-rootfs cage patch). Stage-2's CONFIG_ENV_OFFSET
+	 * once = transform 1 = WL_OUTPUT_TRANSFORM_90 — see tc8-kernel-patches
+	 * 0001/0002/0006 + tc8-rootfs kiosk.service). Stage-2's CONFIG_ENV_OFFSET
 	 * (0x700000) differs from stock 2018.03's env at 0x400000, so
 	 * fw_setenv from Linux can't reliably reach stage-2's env block;
 	 * keep the working cmdline in defaults so we don't depend on
@@ -532,8 +532,8 @@ int board_late_init(void)
 			"fw_devlink=permissive "
 			"video=DSI-1:rotate=270 fbcon=rotate:3 "
 			"vt.global_cursor_default=0 "
-			/* Option-A layout: KEEP stock GPT, rootfs lives in the stock
-			 * `userdata` partition. PARTLABEL is robust vs. p-number
+			/* KEEP stock GPT, rootfs lives in the stock `userdata`
+			 * partition. PARTLABEL is robust vs. p-number
 			 * (stock GPT has ~16 entries). If PARTLABEL fails on-device,
 			 * fall back to the explicit /dev/mmcblk2pN for userdata. */
 			"root=PARTLABEL=userdata");
@@ -579,7 +579,7 @@ int board_late_init(void)
  * (max count seen — fingers land staggered). See UNLOCK_SPEC.md §7a.
  *
  *   5 fingers -> hard SDP/UUU re-entry (env-independent anti-brick escape)
- *   4 fingers -> eMMC exposed to host as USB mass storage (`ums 0 mmc 0`)
+ *   4 fingers -> fastboot gadget (`fastboot usb 0`) — the web provisioner's entry
  *   3 fingers -> DHCP-66 netboot
  *   else      -> normal bootcmd chain
  */
@@ -922,7 +922,7 @@ U_BOOT_CMD(osprep, 1, 0, do_osprep,
 #define BOOTSEL_HOLD_MS		1500	/* how long the mode icon shows */
 /* Bootsel logos are EMBEDDED in the binary (self-contained — no eMMC blob,
  * no partition/slot dependency). Arrays: ublogo_bmp / m2_emmc_bmp / m3_net_bmp
- * / m4_ums_bmp / m5_sdp_bmp. ~192 KB each, 256x256 24bpp. */
+ * / m4_fastboot_bmp / m5_sdp_bmp. ~192 KB each, 256x256 24bpp. */
 #include "tc8_logos.h"
 
 /* Persistent last-selection ("sticky default") — 1 sector @ LBA 0x4C00
@@ -1055,7 +1055,7 @@ static int do_bootsel(struct cmd_tbl *cmdtp, int flag, int argc,
 		 * serving the gadget until the host sends `fastboot reboot`.
 		 * (m4 BMP icon retained; now means "fastboot/provision".) */
 		printf("bootsel: 4 fingers -> fastboot (web provisioner)\n");
-		bootsel_show(p, vid, m4_ums_bmp);
+		bootsel_show(p, vid, m4_fastboot_bmp);
 		mdelay(BOOTSEL_HOLD_MS);
 		run_command("fastboot usb 0", 0);	/* host provisions; blocks */
 		return 0;

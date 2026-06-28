@@ -110,8 +110,9 @@ CONFIG_DFU_MMC=y
 CONFIG_DFU_RAM=y
 CONFIG_UDP_FUNCTION_FASTBOOT=y
 CONFIG_MXC_GPIO=y
-# Boot the OS as an Android boot.img v0 from boot_a via `bootm` (AVB-free —
-# no boota/LIBAVB). Likely already on via `default y if FASTBOOT`; explicit here.
+# Android boot.img parser — required by the unlocked-boota path below (boota
+# loads boot_<slot> as an Android image). Likely already on via
+# `default y if FASTBOOT`; explicit here.
 CONFIG_ANDROID_BOOT_IMAGE=y
 # UNLOCKED boota: re-enable the NXP FSL Android boot path so ONE established
 # method boots stock (slot A) + our Linux (slot B). AVB runs UNLOCKED (unlock stub

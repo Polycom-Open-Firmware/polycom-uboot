@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
-# scripts/build.sh — v0.2: drop in C60 DDR config + C60 DTB into EVK skeleton
+# scripts/build.sh — per-target i.MX8MM stage-2 u-boot build. Reads target.env
+# (DEFCONFIG, DTS, DDR table, overlay) for the target named on the command line,
+# applies the tracked u-boot overlay onto the vendored tree, builds u-boot + ATF
+# bl31, and packs flash.bin via imx-mkimage.
 #
-# What works after this build (verified 2026-05-14 on C60 hw):
-#   ✓ DDR training (LPDDR4, our extracted table)
-#   ✓ BL31 ATF
-#   ✓ U-boot CLI on UART2
-#
-# What this build adds (target — DT swap should fix):
-#   - eMMC (USDHC3) — stock-DTB pinmux
-#   - fastboot gadget — needs C60 DT
-#
+# Targets: c60-kepler_proto1 (default), tc8-chainload-uboot.
 # Output: out/<target>/flash.bin
 
 set -euo pipefail
@@ -29,7 +24,7 @@ FW_DIR=$(ls -d $FW/firmware-imx-*/firmware 2>/dev/null | head -1)
 
 export ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
 
-echo "[1/5] inject C60 DDR table"
+echo "[1/5] inject DDR table"
 EVK="$UB/board/freescale/imx8mm_evk"
 [ -f "$EVK/lpddr4_timing.c.orig" ] || cp "$EVK/lpddr4_timing.c" "$EVK/lpddr4_timing.c.orig"
 cp "$TARGET_DIR/board/lpddr4_timing.c" "$EVK/lpddr4_timing.c"
@@ -38,7 +33,7 @@ echo "[2/5] locate optional stock-reference DTB (md5 sanity only)"
 DTB_SRC="$(ls "$TARGET_DIR"/dts/*.dtb 2>/dev/null | head -1 || true)"
 [ -n "$DTB_SRC" ] && echo "      ref: $DTB_SRC" || echo "      none — dtb md5 sanity will be skipped"
 
-echo "[3.0/5] apply C60 u-boot overlay (tracked patches; vendored/ is gitignored)"
+echo "[3.0/5] apply u-boot overlay (tracked patches; vendored/ is gitignored)"
 OVERLAY="$TARGET_DIR/uboot-overlay"
 if [ -d "$OVERLAY" ]; then
 	# Copy tracked source patches over the freshly-cloned vendored tree so

@@ -293,7 +293,7 @@ New feature requirements (same session):
 
 | # | Feature | Summary |
 |---|---------|---------|
-| F1 | **Touch boot-selector** | Read Goodix **GT9xx** finger-count at power-on: **5 fingers → SDP/UUU**, **4 fingers → eMMC boot**, none → normal `bootcmd`. |
+| F1 | **Touch boot-selector** | Read Goodix **GT9xx** finger-count at power-on: **5 → SDP/UUU**, **4 → fastboot** (web provisioner), **3 → netboot**, **2 → eMMC**, none → last sticky / normal `bootcmd`. |
 | F2 | **Display splash/icon** | Bring panel up in u-boot, show a boot icon. **Staged after F1** (see §5). |
 | F3 | **DHCP-66 netboot** | `bootcmd` does DHCP; if opt-66 (TFTP server) + opt-67 (bootfile) present, TFTP the image and boot it; else fall through to local boot. |
 
@@ -537,8 +537,6 @@ PMS/LCDIF clock values back into `re/C60_DISPLAY_SPEC.md`.
   C cmd `do_gesture`): GT9xx reset/irq, I2C status-reg read, count map.
 - **Env** — `uboot-overlay` env additions: `gesture_sel`, `sdp_enter`,
   `emmc_only`, `dhcp66_boot`, `target_slot`; rewire `bootcmd`.
-- **Build** — `scripts/build.sh` currently hardcodes kepler defconfig/DTB
-  names; parameterize from `target.env` (`DEFCONFIG`, `DTS`).
 
 ## 7. Per-target status
 
