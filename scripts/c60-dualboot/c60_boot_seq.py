@@ -18,9 +18,25 @@ else:
     cmds = [
       "setenv bootargs console=ttymxc1,115200 earlycon=ec_imx6q,0x30890000,115200 clk_ignore_unused root=/dev/mmcblk2p5 rootwait rw init=/sbin/init",
       "mmc dev 0",
-      "mmc read 0x44000000 0x8000 0x18000",
-      "cp.b 0x44000800 0x40080000 0x019f4a00",
-      "cp.b 0x459f5800 0x46000000 0xb7a1",
+      "part start mmc 0 boot_a ba",
+      "part size mmc 0 boot_a bn",
+      "mmc read 0x50000000 ${ba} ${bn}",
+      # Android boot.img v0 header (LE u32 in RAM at 0x50000000):
+      #   kernel_size @+8, ramdisk_size @+16, second_size @+24, page_size @+36
+      # dtb_off = page + roundup(kernel_size,page) + roundup(ramdisk_size,page);
+      # so the DTB source tracks the kernel size instead of a fixed offset.
+      "setexpr.l hks *0x50000008",
+      "setexpr.l hrs *0x50000010",
+      "setexpr.l hss *0x50000018",
+      "setexpr.l hps *0x50000024",
+      "setexpr pm1 ${hps} - 1",
+      "setexpr kpd ${hks} + ${pm1}", "setexpr kpd ${kpd} / ${hps}", "setexpr kpd ${kpd} * ${hps}",
+      "setexpr rpd ${hrs} + ${pm1}", "setexpr rpd ${rpd} / ${hps}", "setexpr rpd ${rpd} * ${hps}",
+      "setexpr dof ${hps} + ${kpd}", "setexpr dof ${dof} + ${rpd}",
+      "setexpr ksr 0x50000000 + ${hps}",
+      "setexpr dsr 0x50000000 + ${dof}",
+      "cp.b ${ksr} 0x40080000 ${hks}",
+      "cp.b ${dsr} 0x46000000 ${hss}",
       "booti 0x40080000 - 0x46000000",
     ]
 fd = os.open(dev, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
