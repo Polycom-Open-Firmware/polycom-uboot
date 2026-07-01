@@ -7,7 +7,7 @@ Mainline u-boot for Polycom i.MX 8M Mini devices — currently:
 | `c60-kepler_proto1`       | Trio C60                 | kepler_proto1     | 2 GiB LPDDR4 |
 | `tc8-chainload-uboot`     | TC8 conference tablet    | proline_exec      | 2 GiB LPDDR4 |
 
-Both use the same i.MX 8M Mini Quad SoC and (per 2026-05-14 live testing)
+Both use the same i.MX 8M Mini Quad SoC and
 share DDR training configs — but each has its own board file, DT, and any
 board-specific quirks. **The two targets are delivered by different
 mechanisms** because their BootROM lock state differs (see Goal).
@@ -20,13 +20,13 @@ How we get there depends on the device's HAB (secure-boot) fuse state:
 ### C60 — HAB open: replace stage-1 directly
 
 1. **SDP rescue path**: with chassis BOOT_MODE switches set to USB-download
-   (BMOD=00), `uuu` on the host loads this u-boot into RAM. We control
+   (BMOD=00), `uuu` on the host loads this u-boot into RAM. It controls
    `bootcmd` so the chain becomes hands-off: power-on → SDP enum →
    uuu loads → u-boot autoboots Linux from slot A or B.
 
 2. **Removable Polycom override**: stock u-boot enters fastboot mode whenever
-   BootROM detects USB-boot (`is_usb_boot` check at VA 0x40204268 per the
-   stock RE). Our build skips that override, so the loop SDP→u-boot→fastboot
+   BootROM detects USB-boot (`is_usb_boot` check at VA 0x40204268).
+   This build skips that override, so the loop SDP→u-boot→fastboot
    never traps.
 
 ### TC8 — HAB closed: chainload a stage-2 from eMMC boot1
@@ -59,9 +59,7 @@ run our unsigned **U-Boot 2024.04 as a chainloaded stage-2**:
   gadget (WinUSB, `1fc9:0152`) is shared with the FSL fastboot command layer.
 
 See `UNLOCK_SPEC.md` for the full TC8 spec and bench history,
-`Polycom-Open-Firmware/c60-firmware-build` for the kernel/rootfs side,
-and the user's local `c60_uuu_sdp_workflow` / `c60_bootmode_switches`
-memory notes.
+and `Polycom-Open-Firmware/c60-firmware-build` for the kernel/rootfs side.
 
 ## Layout
 
@@ -101,7 +99,7 @@ via SDP.
 ## Status
 
 - **C60**: clean board port — eMMC works, kernel handoff reaches Linux;
-  `uuu` dual-boot (our kernel+Debian on slot A / stock on slot B) works.
+  `uuu` dual-boot (custom kernel+Debian on slot A / stock on slot B) works.
 - **TC8**: chainloaded stage-2 **delivered and proven on hardware** —
   auto-persisting chain (stock → stage-2), bootsel logo + GT9271 gesture,
   F2 panel + F3 networking up, and the unlocked-`boota` path boots

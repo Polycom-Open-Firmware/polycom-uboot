@@ -1,9 +1,9 @@
 # C60 (kepler_proto1) — boot recipes for polycom-uboot
 
 These u-boot CLI sequences boot the C60 once `flash.bin` (this repo's mainline u-boot)
-is live in DRAM via uuu. Verified 2026-05-14 against a production C60 in SDP mode.
+is live in DRAM via uuu, with the board in SDP mode.
 
-## GPT layout (probed live, not assumed)
+## GPT layout
 
 ```
   1  0x00004000  0x00005fff  dtbo_a       (4 MiB)
@@ -46,17 +46,18 @@ setenv bootargs 'console=ttymxc1,115200 earlycon=ec_imx6q,0x30890000,115200 init
 booti 0x40480000 0x50000000:0x622cc1 0x43400040
 ```
 
-**Verified:** kernel printk reaches t=6.5s (mmc2 enumerated, GPT visible, all
-17 partitions, LP5569 LEDs, TAS5751M codec, kepler_cap touch). Then quiet —
-this is the documented "stock 2023 service-console gate" (AOSP `service
-console` does not start at ro.debuggable=0; see `c60_stock_uart_shell_gate.md`).
-That silence ≠ failure.
+Expected behaviour: kernel printk reaches mmc2 enumeration, GPT visible
+(all 17 partitions), LP5569 LEDs, TAS5751M codec, kepler_cap touch, then
+goes quiet. AOSP's `service console` does not start when
+`ro.debuggable=0`, so the silence after bring-up is the stock
+service-console gate, not a boot failure.
 
-## Recipe 2 — boot mainline kernel (slot A, "kerbek")
+## Recipe 2 — boot mainline kernel (slot A)
 
-Slot A holds an Android boot.img v0 produced by `c60-firmware-build/bootimg/pack_boota_set.sh`:
-kernel in primary slot, **DTB in `second`** (ramdisk_size=0). Layout offsets
-listed are for the current build; recompute if kernel_size changes.
+Slot A holds an Android boot.img v0 produced by `c60-firmware-build`
+(`pack_boota_set.sh`): kernel in primary slot, **DTB in `second`**
+(ramdisk_size=0). Layout offsets listed are for the current build;
+recompute if kernel_size changes.
 
 ```sh
 # Read boot_a high — don't clobber where booti will relocate the kernel
@@ -76,16 +77,16 @@ cp.b 0x44000800 0x40080000 0x019f4a00
 # DTB to high RAM (keep clear of kernel image_size from 0x40080000).
 cp.b 0x459f5800 0x46000000 0xb79d
 
-# Mainline kernel + Debian rootfs cmdline (matches profiles/emmc.env):
+# Mainline kernel + Debian rootfs cmdline (root on system_a):
 setenv bootargs 'console=tty0 console=ttymxc1,115200 earlycon=ec_imx6q,0x30890000,115200 keep_bootcon panic=10 rw rootwait fw_devlink=permissive root=/dev/disk/by-partlabel/system_a'
 
 booti 0x40080000 - 0x46000000
 ```
 
-**Verified:** kernel parses DTB ("Hardware name: Polycom Trio C60 (Kepler
-proto1) (DT)" appears in early printk), etnaviv/mxsfb/samsung-dsim probe,
-PCIe init reaches iATU unroll. State beyond ~2.5s pending separate
-investigation (see `c60_audio_card_blocker` / `c60_wifi_pcie_blocker`).
+The kernel parses the DTB ("Hardware name: Polycom Trio C60 (Kepler
+proto1) (DT)" appears in early printk); etnaviv/mxsfb/samsung-dsim probe
+and PCIe init reaches iATU unroll. Bring-up beyond that point (audio
+card, WiFi/PCIe) is tracked separately.
 
 ## Memory map for both recipes
 
@@ -103,16 +104,16 @@ investigation (see `c60_audio_card_blocker` / `c60_wifi_pcie_blocker`).
 
 ## Why `bootargs` matters
 
-Earlier attempts that booted with `bootargs=""` produced a Synchronous Abort
-at PC=0x41cf0000 with all-zero instruction immediately after "Starting
-kernel ..." — the kernel chain crashed before reaching any printable
-output. Setting an explicit `console=ttymxc1,115200 earlycon=...` made
-both kernels print their banner. Stock Polycom u-boot prepends those
-arguments via `CONFIG_CMDLINE`; mainline u-boot does not, so we must.
+Booting with an empty `bootargs` gives the kernel no
+`console=`/`earlycon=`, so the early boot chain faults before any output
+is printed. An explicit `console=ttymxc1,115200 earlycon=...` is required
+for either kernel to reach its banner. Stock Polycom u-boot prepends
+these via `CONFIG_CMDLINE`; mainline u-boot does not, so they are set
+explicitly in the recipes above.
 
 ## TODO
 
-- Encode as `bootcmd_stock` and `bootcmd_kerbek` env macros with a `boot_slot`
-  selector, so the device autoboots without UART intervention.
-- Wire `usb start` + gadget so `fastboot` over USB works for live flash from
-  this u-boot (currently usb gadget init fails -19 in mfgtool path).
+- Encode the slot sequences as `bootcmd` env macros with a `boot_slot`
+  selector so the board autoboots without UART intervention.
+- Fold live flashing (fastboot over the u-boot USB gadget) into an
+  env-driven path.

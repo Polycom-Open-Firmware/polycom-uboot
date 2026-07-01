@@ -110,22 +110,6 @@ binding until changed *here*. Linked from repo `CLAUDE.md` doc tree.
 >   All in `targets/tc8-chainload-uboot/uboot-overlay/` (DTS +
 >   raydium-rm67191.c). Net: **F1/F2/F3-capable fully-custom u-boot is
 >   delivered on the HAB-closed TC8 as a chainloaded stage-2.**
-> - **[P1] ⚠ SAFETY — TC8/C60 share a cloned identity.** The C60
->   (`Polycom Trio C60 (Kepler proto1)`, IP often `.47`) carries the
->   SAME MAC `d6:8e:5d:39:e4:5e` AND hostname `tc8-kiosk` as the TC8
->   (cloned rootfs). **Neither MAC nor hostname distinguishes them.**
->   The ONLY authoritative discriminator is the **DT model string**
->   (`/sys/firmware/devicetree/base/model`: TC8 = `… LCC PROTO`, C60 =
->   `… Kepler …`). Any reflash MUST hard-gate on the DT model before dd.
->   probe-1 serial (`ws://192.168.10.123`) is physically the TC8 (C60 =
->   probe-2 `.95`) → use it to learn/confirm the TC8's IP.
-> - **Proven reflash+test recipe (C60-safe):** PoE cold-boot port 1 →
->   poll SSH `.42`, **hard DT-model guard** → `dd u-boot.bin
->   of=/dev/mmcblk2 bs=512 seek=131072 conv=fsync` (kernel_bak/p2
->   scratch, non-load-bearing) → catch stock over probe-1 →
->   `mmc dev 1; mmc read 0x40200000 0x20000 0x830; dcache flush;
->   icache off; dcache off; go 0x40200000`. Helpers:
->   `/tmp/tc8_full.sh`, `/tmp/wsce2.py` (drafts).
 >
 > ### ✅ 2026-05-17 — SHIPPABLE: autonomous chain → Debian PROVEN end-to-end
 > The auto-persisting chainloaded stage-2 now boots **Debian 12 with
@@ -464,7 +448,7 @@ blob @0x5000 (readback md5-verified) into the gap the flat GPT already
 reserves (first partition @16 MiB). One-command unlock-FW installer,
 `bash -n` clean. **GATE — real end-to-end run needs the OS artifacts**
 (`Image`/`imx8mm-tc8.dtb`/`rootfs.img[.zst]`): NOT built anywhere
-(`/tmp/tc8-v0.3.0` empty; no kernel/rootfs on host or aibox). Building
+(`/tmp/tc8-v0.3.0` empty; no kernel/rootfs on host). Building
 them (`tc8-firmware-build` build.sh + rootfs.sh) is the remaining
 blocker for the `mmcboot`→Linux end-to-end validation.
 
@@ -542,11 +526,7 @@ PMS/LCDIF clock values back into `re/C60_DISPLAY_SPEC.md`.
 
 | Target | DDR | defconfig | u-boot DTS | gesture | dhcp66 | splash | on-device |
 |--------|-----|-----------|-----------|---------|--------|--------|-----------|
-| c60-kepler_proto1 | ✓ | boota+AVB (pre-unlock) | ✓ | — | — | drivers on | uuu dual-boot works |
 | tc8-chainload-uboot | ✓ (symlink) | ✓ (unlocked boota) | ✓ | ✓ | ✓ | ✓ (panel up) | **DELIVERED + proven on HW** |
-
-C60 will be migrated to the unlocked (D1) defconfig *after* TC8 proves it,
-to avoid regressing the working reference.
 
 ## 7a. TC8 hardware map — from stock `lcc.dtb` [P2, deterministic]
 
@@ -580,8 +560,7 @@ Panel path implemented & compiling (flash.bin green 2026-05-16):
   (Enter Page3/GIP_1-3/Page4/Page1/Page0, TE-on, sleep-out 120 ms,
   display-on 150 ms). `rad_platform_data` gained a per-variant
   `.timing`.
-- **Timing**: from `re/c60_stock_panel_full_decomp.md` —
-  **800×1280, pixelclock 76 556 400 Hz**, hfp/hbp=81, hsync=12,
+- **Timing**: **800×1280, pixelclock 76 556 400 Hz**, hfp/hbp=81, hsync=12,
   vfp=8, vbp=18, vsync=4, HSYNC/VSYNC/DE-LOW + PIXDATA-negedge.
 - **DTS**: base `imx8mm.dtsi` already carries the lcdif↔dsi graph;
   TC8 DTS enables `&lcdif`, retargets `&mipi_dsi` to the u-boot

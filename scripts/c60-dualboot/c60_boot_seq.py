@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-# Interrupt our u-boot autoboot over UART and run the slot boot sequence.
+# Interrupt the u-boot autoboot over UART and run the slot boot sequence.
+# The UART device is configurable via the C60_TTY environment variable.
 import os, sys, time
 slot = sys.argv[1] if len(sys.argv) > 1 else "a"
-dev = "/dev/ttyUSB0"
+dev = os.environ.get("C60_TTY", "/dev/ttyUSB0")
 if slot == "b":
     cmds = [
       "setenv bootargs console=ttymxc1,115200 earlycon=ec_imx6q,0x30890000,115200 init=/init androidboot.console=ttymxc1 androidboot.hardware=Poly cma=320M@0x400M-0xb80M androidboot.selinux=permissive androidboot.slot_suffix=_b androidboot.veritymode=disabled root=/dev/mmcblk2p6 skip_initramfs rootwait",
