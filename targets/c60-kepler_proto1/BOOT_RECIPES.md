@@ -111,6 +111,30 @@ for either kernel to reach its banner. Stock Polycom u-boot prepends
 these via `CONFIG_CMDLINE`; mainline u-boot does not, so they are set
 explicitly in the recipes above.
 
+## Touch-gated boot selection
+
+The board exposes a `c60_touch` command that reads the FocalTech FT5x46
+touch controller (i2c2 @ 0x38). It muxes and deasserts the touch reset
+(GPIO2_IO3 / pad SD1_DATA1), waits for the controller firmware, then reads
+the touch-report registers (`0x02` = point count, `0x03..0x06` = touch1
+XH/XL/YH/YL). It prints the point, sets `touch_points`, `touch_x` and
+`touch_y`, and returns success (0) when a finger is present:
+
+```sh
+u-boot=> c60_touch
+c60_touch: points=1 event=2 x=360 y=640
+```
+
+The `touch_boot_sel` env macro uses the return code to pick a slot:
+
+```sh
+u-boot=> run touch_boot_sel   # touched -> boot_slot=b, else boot_slot=a
+```
+
+Coordinates are 12-bit (X 0..719, Y 0..1279 in the panel's native portrait
+orientation). No panel is required — the controller reports finger presses
+with the display off.
+
 ## TODO
 
 - Encode the slot sequences as `bootcmd` env macros with a `boot_slot`

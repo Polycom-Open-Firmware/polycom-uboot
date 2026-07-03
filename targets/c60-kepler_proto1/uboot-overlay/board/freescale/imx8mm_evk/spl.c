@@ -267,6 +267,15 @@ int power_init_board(void)
 	pmic_reg_write(p, BD718XX_BUCK2_VOLT_RUN, 0x1e);
 
 	/*
+	 * NOTE (2026-07-03): tried enabling LDO1-4 here (BD71847 stock rails)
+	 * as a panel-black quick test — the writes DID NOT LAND (readback of
+	 * 0x18-0x1b stayed 0x22/0x20/0x00/0x00, panel still dark). The legacy
+	 * power_bd71837_init() pmic_reg_write path does not stick these on the
+	 * BD71847; the real fix is the DM bd71847 driver route. See
+	 * targets/c60-kepler_proto1/PMIC-DISCREPANCIES.md (item 1).
+	 */
+
+	/*
 	 * Leave the voltage regs UNLOCKED (REGLOCK = 0x1: PWRCTRL locked,
 	 * voltage write-lock clear). The stock Polycom NXP-BSP kernel's
 	 * bd718x7 regulator driver reconfigures BUCK2 for runtime I2C-DVS
