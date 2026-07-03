@@ -55,6 +55,8 @@ int enable_i2c_clk(unsigned char enable, unsigned i2c_num)
 }
 
 static struct imx_int_pll_rate_table imx8mm_fracpll_tbl[] = {
+	/* C60 panel pixel PLL: 24*(199+1638/65536)/4 = 1194.150 MHz; /15 = 79.61 */
+	PLL_1443X_RATE(1194150000U, 199, 1, 2, 1638),
 	PLL_1443X_RATE(1000000000U, 250, 3, 1, 0),
 	PLL_1443X_RATE(933000000U, 311, 4, 1, 0),
 	PLL_1443X_RATE(900000000U, 300, 2, 2, 0),
@@ -313,6 +315,20 @@ void mxs_set_lcdclk(uint32_t base_addr, uint32_t freq)
 {
 	uint32_t div, pre, post;
 
+	/*
+	 * C60 RM67191-class panel: 79.61 MHz is NOT dividable out of the
+	 * EVK's 594 MHz video PLL (nearest /7 = 84.86, +6.6% — measured live;
+	 * the DSI link budget and the panel's 65 Hz timing are sized for
+	 * exactly 79.61). Reprogram the video PLL to 1194.15 MHz and divide
+	 * by 15 (pre 3 x post 5) for an exact match, like the kernel does.
+	 */
+	if (freq == 79610) {
+		fracpll_configure(ANATOP_VIDEO_PLL, 1194150000U);
+		pre = 3;
+		post = 5;
+		goto find;
+	}
+
 	div = VIDEO_PLL_RATE / 1000;
 	div = (div + freq - 1) / freq;
 
@@ -387,7 +403,14 @@ void enable_display_clk(unsigned char enable)
 #ifdef CONFIG_IMX8MN
 		clock_set_target_val(DISPLAY_DSI_PHY_REF_CLK_ROOT, CLK_ROOT_ON | CLK_ROOT_SOURCE_SEL(7) |CLK_ROOT_POST_DIV(CLK_ROOT_POST_DIV22));
 #else
-		clock_set_target_val(MIPI_DSI_PHY_REF_CLK_ROOT, CLK_ROOT_ON | CLK_ROOT_SOURCE_SEL(7) |CLK_ROOT_POST_DIV(CLK_ROOT_POST_DIV22));
+		/* C60: DPHY PLL ref = osc_24m direct, as the kernel runs it
+		 * (dsi_phy_ref mux 0). The EVK's video_pll1/22 tap assumes the
+		 * video PLL stays at 594 MHz, but the LCDIF re-programs that
+		 * PLL for the 79.61 MHz panel pixel clock, so the ref lands at
+		 * ~12 MHz and the DSIM PLL is programmed 2x off (955 instead
+		 * of 477.66 Mbps) — the panel never locks, its init is lost,
+		 * and the DDIC-gated LED backlight stays dark. */
+		clock_set_target_val(MIPI_DSI_PHY_REF_CLK_ROOT, CLK_ROOT_ON | CLK_ROOT_SOURCE_SEL(0));
 #endif
 		clock_enable(CCGR_DISPMIX, true);
 	} else {
