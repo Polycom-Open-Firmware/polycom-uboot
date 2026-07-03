@@ -71,6 +71,37 @@
 	};
 };
 
+&i2c2 {
+	clock-frequency = <400000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_i2c2>;
+	status = "okay";
+
+	/* FocalTech FT5x46-class touch controller @ 0x38. No u-boot touch
+	 * driver binds here; the c60_touch board command drives the reset
+	 * GPIO (SD1_DATA1) and reads the touch-report registers over this
+	 * bus so a finger press can gate boot selection. Also the CENTRE
+	 * LP5569 light-bar controller @ 0x32 (driven raw by the c60_ledbar
+	 * board code — no u-boot LED driver binds). */
+};
+
+/* Light-bar side controllers. The 3 LP5569s live one-per-bus: centre on
+ * i2c2 (above), left on i2c3, right on i2c4, all @ 0x32. Enable the two
+ * side buses so the bootsel code can reach them over raw DM-I2C. */
+&i2c3 {
+	clock-frequency = <400000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_i2c3>;
+	status = "okay";
+};
+
+&i2c4 {
+	clock-frequency = <400000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_i2c4>;
+	status = "okay";
+};
+
 &uart2 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_uart2>;
@@ -113,6 +144,28 @@
 		fsl,pins = <
 			MX8MM_IOMUXC_I2C1_SCL_I2C1_SCL                  0x400001c3
 			MX8MM_IOMUXC_I2C1_SDA_I2C1_SDA                  0x400001c3
+		>;
+	};
+
+	pinctrl_i2c2: i2c2grp {
+		fsl,pins = <
+			MX8MM_IOMUXC_I2C2_SCL_I2C2_SCL                  0x400001c3
+			MX8MM_IOMUXC_I2C2_SDA_I2C2_SDA                  0x400001c3
+		>;
+	};
+
+	/* Light-bar side buses (values verified against stock c60.dts). */
+	pinctrl_i2c3: i2c3grp {
+		fsl,pins = <
+			MX8MM_IOMUXC_I2C3_SCL_I2C3_SCL                  0x400001c3
+			MX8MM_IOMUXC_I2C3_SDA_I2C3_SDA                  0x400001c3
+		>;
+	};
+
+	pinctrl_i2c4: i2c4grp {
+		fsl,pins = <
+			MX8MM_IOMUXC_I2C4_SCL_I2C4_SCL                  0x400001c3
+			MX8MM_IOMUXC_I2C4_SDA_I2C4_SDA                  0x400001c3
 		>;
 	};
 
@@ -167,6 +220,122 @@
 			MX8MM_IOMUXC_NAND_CE3_B_USDHC3_DATA6            0x1d6
 			MX8MM_IOMUXC_NAND_CLE_USDHC3_DATA7              0x1d6
 			MX8MM_IOMUXC_NAND_CE1_B_USDHC3_STROBE           0x196
+		>;
+	};
+};
+
+/*
+ * ===========================================================================
+ * Display: LCDIF -> Samsung MIPI-DSIM -> RM67191-class 720x1280 panel.
+ *
+ * Ports the shipped Linux v0.1.7 bring-up (c60-kernel-patches 0001/0012) onto
+ * u-boot's proven sec_mipi_dsim + mxsfb + video_link path. Structure mirrors
+ * the working TC8 stage-2 DTS (imx8mm-polycom-proline-exec.dts) — which
+ * documents every gotcha for this exact u-boot video stack:
+ *   - panel is a TOP-LEVEL node (u-boot video_link only chains DM-bound
+ *     top-level udevices; a &mipi_dsi child is never bound, so its
+ *     get_display_timing()/enable never run);
+ *   - the UCLASS_DSI_HOST back-end is a SEPARATE top-level "dsi-host" node;
+ *   - &mipi_dsi keeps the base "fsl,imx8mm-mipi-dsim" compatible (binds the
+ *     imx_sec_dsim VIDEO_BRIDGE that mxsfb actually drives);
+ *   - &lcdif must carry `display = <&display0>` + bits-per-pixel or mxsfb
+ *     refuses to probe ("required display property isn't provided").
+ * C60 specifics vs TC8: 720x1280 @ 79.61 MHz (not 800x1280/76.5 MHz),
+ * non-burst SYNC-PULSE (video-mode=2; burst gave wrong colours per the RE),
+ * panel power-enable gpio2_4, reset gpio2_5, PWM4 backlight on SAI3_MCLK.
+ * ===========================================================================
+ */
+/ {
+	backlight: backlight {
+		compatible = "pwm-backlight";
+		pwms = <&pwm4 0 100000 0>;         /* stock 100 us period = 10 kHz */
+		brightness-levels = <0 255>;
+		num-interpolated-steps = <255>;
+		default-brightness-level = <250>;  /* stock 0xfa */
+		status = "okay";
+	};
+
+	c60_panel: c60-panel {
+		compatible = "poly,kepler-c60";
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_disp_ctrl>;
+		power-gpio = <&gpio2 4 GPIO_ACTIVE_HIGH>;  /* panel 3.3V enable */
+		reset-gpio = <&gpio2 5 GPIO_ACTIVE_LOW>;   /* panel reset */
+		dsi-lanes = <4>;
+		video-mode = <2>;                          /* non-burst sync-pulse */
+		backlight = <&backlight>;
+		status = "okay";
+
+		port {
+			c60_from_dsim: endpoint {
+				remote-endpoint = <&dsim_to_c60>;
+			};
+		};
+	};
+
+	dsi_host: dsi-host {
+		compatible = "samsung,sec-mipi-dsi";
+		status = "okay";
+	};
+};
+
+&lcdif {
+	display = <&display0>;
+	status = "okay";
+
+	display0: display@0 {
+		bits-per-pixel = <24>;
+		bus-width = <24>;
+
+		display-timings {
+			native-mode = <&timing_c60>;
+			timing_c60: timing-c60 {
+				clock-frequency = <79610000>;
+				hactive = <720>;
+				vactive = <1280>;
+				hfront-porch = <100>;
+				hback-porch = <30>;
+				hsync-len = <90>;
+				vfront-porch = <16>;
+				vback-porch = <2>;
+				vsync-len = <5>;
+				hsync-active = <0>;   /* NHSYNC */
+				vsync-active = <0>;   /* NVSYNC */
+				de-active = <0>;      /* DE low */
+				pixelclk-active = <1>;
+			};
+		};
+	};
+};
+
+&mipi_dsi {
+	status = "okay";
+
+	port@1 {
+		dsim_to_c60: endpoint {
+			remote-endpoint = <&c60_from_dsim>;
+		};
+	};
+};
+
+&pwm4 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_pwm4>;
+	status = "okay";
+};
+
+&iomuxc {
+	/* panel power-enable (gpio2_4) + reset (gpio2_5); GPIO mode, pad-ctl 0x16 */
+	pinctrl_disp_ctrl: dispctrlgrp {
+		fsl,pins = <
+			MX8MM_IOMUXC_SD1_DATA2_GPIO2_IO4        0x16
+			MX8MM_IOMUXC_SD1_DATA3_GPIO2_IO5        0x16
+		>;
+	};
+	/* PWM4_OUT on SAI3_MCLK, ALT1, pad-ctl 0xd6 (stock; &sai3 left disabled) */
+	pinctrl_pwm4: pwm4grp {
+		fsl,pins = <
+			MX8MM_IOMUXC_SAI3_MCLK_PWM4_OUT         0xd6
 		>;
 	};
 };

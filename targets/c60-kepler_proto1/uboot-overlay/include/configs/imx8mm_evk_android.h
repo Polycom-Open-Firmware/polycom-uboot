@@ -21,6 +21,7 @@
 	"sd_dev=1\0" \
 	"fastboot_dev=mmc\0" \
 	"target_ubootdev=0\0" \
+	"touch_boot_sel=if c60_touch; then setenv boot_slot b; else setenv boot_slot a; fi\0" \
 
 /* Enable mcu firmware flash */
 #ifdef CONFIG_FLASH_MCUFIRMWARE_SUPPORT
