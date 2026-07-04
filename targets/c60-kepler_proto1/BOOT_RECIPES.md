@@ -135,9 +135,26 @@ Coordinates are 12-bit (X 0..719, Y 0..1279 in the panel's native portrait
 orientation). No panel is required — the controller reports finger presses
 with the display off.
 
-## TODO
+## Persistent autoboot (A/B slot selector)
 
-- Encode the slot sequences as `bootcmd` env macros with a `boot_slot`
-  selector so the board autoboots without UART intervention.
-- Fold live flashing (fastboot over the u-boot USB gadget) into an
-  env-driven path.
+Implemented: `board_late_init` sets `preboot` from C code to a self-contained,
+slot-parameterised boot (`boot_${boot_slot}` -> boot.img v0 parse -> `booti`,
+`root=system_${boot_slot}`), defaulting `boot_slot=a`. The LED-bar `c60_bootsel`
+sets `${boot_slot}`. `preboot` (not `bootcmd`) is used because the FSL USB-boot
+detector overrides `bootcmd` with fastboot; `preboot` runs first. It is set from
+board code rather than `CONFIG_PREBOOT` because the Android env header
+(`imx8mm_evk_android.h`) supplies the compiled default env and does not carry
+`CONFIG_PREBOOT` through.
+
+Status: the boot **logic is proven** — `run preboot` boots Linux reliably
+(15 s). Full **cold-boot autoboot is NOT yet validated on hardware**: the SDP
+RAM-load dev flow can't demonstrate it (the USB-boot detector forces fastboot,
+and that path appears to reload the env from eMMC, wiping `board_late_init`'s
+runtime writes). This confound does **not** exist on a production **eMMC boot**.
+
+TODO to close:
+- Validate on the production path: flash U-Boot into the eMMC boot area and
+  cold-boot it natively (not SDP RAM-load), confirm hands-off boot to the
+  selected slot.
+- Fold live flashing (fastboot over the u-boot USB gadget) into an env-driven
+  path.

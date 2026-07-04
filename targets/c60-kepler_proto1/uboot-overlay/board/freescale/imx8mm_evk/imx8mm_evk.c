@@ -999,7 +999,41 @@ int board_late_init(void)
 	 * the panel backlight work is parked -- the bar is the real UI and is
 	 * fully camera-verifiable. Returns so preboot/bootcmd runs.
 	 */
-	c60_bootsel();
+	c60_bootsel();		/* sets ${boot_slot} (defaults a) */
+
+	/*
+	 * Set `preboot` from board code, not CONFIG_PREBOOT. The Android env
+	 * header (imx8mm_evk_android.h) supplies the compiled default env
+	 * (bootcmd="boota mmc0") and does NOT carry the defconfig CONFIG_PREBOOT
+	 * through, so on any clean/erased env `preboot` is empty and the board
+	 * drops to fastboot. Setting it here — unconditionally, the way the
+	 * Android header sets bootcmd — guarantees the A/B local-boot runs
+	 * regardless of saved-env state. `preboot` (not bootcmd) because in the
+	 * SDP RAM-load path the FSL USB-boot detector overrides bootcmd with
+	 * fastboot; preboot still runs first. Self-contained + parameterised by
+	 * ${boot_slot} (boot.img v0 parse -> booti; see BOOT_RECIPES.md).
+	 */
+	if (!env_get("boot_slot"))
+		env_set("boot_slot", "a");
+	env_set("preboot",
+		"mmc dev 0; "
+		"part start mmc 0 boot_${boot_slot} ba; "
+		"part size mmc 0 boot_${boot_slot} bn; "
+		"mmc read 0x50000000 ${ba} ${bn}; "
+		"setexpr.l hks *0x50000008; setexpr.l hrs *0x50000010; "
+		"setexpr.l hss *0x50000018; setexpr.l hps *0x50000024; "
+		"setexpr pm1 ${hps} - 1; "
+		"setexpr kpd ${hks} + ${pm1}; setexpr kpd ${kpd} / ${hps}; "
+		"setexpr kpd ${kpd} * ${hps}; "
+		"setexpr rpd ${hrs} + ${pm1}; setexpr rpd ${rpd} / ${hps}; "
+		"setexpr rpd ${rpd} * ${hps}; "
+		"setexpr dof ${hps} + ${kpd}; setexpr dof ${dof} + ${rpd}; "
+		"setexpr ksr 0x50000000 + ${hps}; setexpr dsr 0x50000000 + ${dof}; "
+		"cp.b ${ksr} 0x40080000 ${hks}; cp.b ${dsr} 0x46000000 ${hss}; "
+		"setenv bootargs console=tty0 console=ttymxc1,115200 "
+		"earlycon=ec_imx6q,0x30890000,115200 panic=10 rw rootwait "
+		"root=PARTLABEL=system_${boot_slot} systemd.unit=multi-user.target; "
+		"booti 0x40080000 - 0x46000000");
 #endif
 #endif
 
