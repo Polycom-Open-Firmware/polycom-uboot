@@ -994,6 +994,20 @@ int board_late_init(void)
 	c60_display_test();
 #else
 	/*
+	 * USB/SDP boot = provisioning: the browser (or uuu) just loaded us over
+	 * the BootROM and needs the fastboot gadget, which the FSL detector
+	 * arms via bootcmd. Skip bootsel and the A/B local boot entirely, and
+	 * neutralise any `preboot` a saved eMMC env may carry — preboot runs
+	 * before bootcmd, so it otherwise hijacks the boot into Linux (seen
+	 * live: v0.1.8 booted the installed OS instead of parking in fastboot
+	 * when loaded from the wizard).
+	 */
+	if (is_usb_boot()) {
+		env_set("preboot", NULL);
+		return 0;
+	}
+
+	/*
 	 * PHASE B: light-bar + touch bootsel. Replaces the Phase-A display
 	 * diagnostic (c60_display_test, still compiled for reference) now that
 	 * the panel backlight work is parked -- the bar is the real UI and is
