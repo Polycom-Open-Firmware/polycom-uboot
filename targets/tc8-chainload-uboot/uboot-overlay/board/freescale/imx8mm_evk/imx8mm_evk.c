@@ -6,7 +6,10 @@
 #include <efi_loader.h>
 #include <env.h>
 #include <init.h>
+#include <memalign.h>
 #include <miiphy.h>
+#include <mmc.h>
+#include <net.h>
 #include <netdev.h>
 #include <asm/global_data.h>
 #include <asm/mach-imx/iomux-v3.h>
@@ -436,11 +439,70 @@ int board_mmc_get_env_dev(int devno)
 	return devno == 2 ? 0 : devno;
 }
 
+/*
+ * Factory MAC adoption. Stage-2 keeps its env at 0x700000 and ships with
+ * CONFIG_NET_RANDOM_ETHADDR; with no `ethaddr` saved there, every boot
+ * invented a fresh random MAC which fdt_fixup_ethernet() then wrote into
+ * the DTB `local-mac-address` — the panel changed identity on every boot.
+ *
+ * The FACTORY MAC still lives in the STOCK 2018.03 u-boot env block at raw
+ * eMMC byte offset 0x400000 (unpartitioned gap between the signed stock
+ * bootloader region and the first GPT partition; 4-byte CRC header, then
+ * NUL-separated key=value pairs): `ethaddr=<factory>` (Polycom OUI
+ * 00:e0:db, matches the device-cert CN in the `cert` partition).
+ *
+ * Adopt exactly that ONE variable — do NOT env-import the whole block: its
+ * `bootcmd` is the boot1 chainload (importing it would make stage-2
+ * re-chainload in a loop), and nothing may ever saveenv over shared stock
+ * state. Precedence: a MAC saved in stage-2's own env (0x700000) wins; the
+ * stock factory value is the everyday default; the NET_RANDOM_ETHADDR
+ * fallback only fires on units whose stock env carries no ethaddr (and the
+ * rootfs tc8-hwaddr.sh then pins a SoC-UID-derived address anyway).
+ */
+#define TC8_STOCK_ENV_LBA	(0x400000 / 512)	/* stock env @ 4 MiB */
+#define TC8_STOCK_ENV_BLKS	32			/* scan 16 KiB */
+
+static void tc8_adopt_factory_ethaddr(void)
+{
+	ALLOC_CACHE_ALIGN_BUFFER(u8, buf, TC8_STOCK_ENV_BLKS * 512);
+	struct mmc *mmc;
+	u8 mac[6];
+	int i;
+
+	if (env_get("ethaddr"))
+		return;
+
+	mmc = find_mmc_device(0);		/* eMMC user area */
+	if (!mmc || mmc_init(mmc))
+		return;
+	if (blk_dread(mmc_get_blk_desc(mmc), TC8_STOCK_ENV_LBA,
+		      TC8_STOCK_ENV_BLKS, buf) != TC8_STOCK_ENV_BLKS)
+		return;
+
+	/* 4-byte CRC header, then a NUL-separated key=value pool */
+	for (i = 4; i < TC8_STOCK_ENV_BLKS * 512 - 26; i++) {
+		if (i > 4 && buf[i - 1] != '\0')
+			continue;	/* not at a key start */
+		if (memcmp(&buf[i], "ethaddr=", 8))
+			continue;
+		buf[i + 25] = '\0';	/* bound the value for the parser */
+		string_to_enetaddr((char *)&buf[i + 8], mac);
+		if (is_valid_ethaddr(mac)) {
+			eth_env_set_enetaddr("ethaddr", mac);
+			printf("Net:   factory ethaddr %pM (stock env @0x400000)\n",
+			       mac);
+		}
+		return;
+	}
+}
+
 int board_late_init(void)
 {
 #ifdef CONFIG_ENV_IS_IN_MMC
 	board_late_mmc_env_init();
 #endif
+
+	tc8_adopt_factory_ethaddr();
 
 	if (IS_ENABLED(CONFIG_ENV_VARS_UBOOT_RUNTIME_CONFIG)) {
 		env_set("board_name", "EVK");
