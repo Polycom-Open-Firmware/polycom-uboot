@@ -588,11 +588,12 @@ int board_late_init(void)
 	 */
 	if (!env_get("tc8_bootargs"))
 		env_set("tc8_bootargs",
-			"console=tty0 console=ttymxc1,115200 "
+			"console=ttymxc1,115200 console=tty0 "
 			"earlycon=ec_imx6q,0x30890000,115200 "
 			"keep_bootcon panic=10 rw rootwait "
 			"fw_devlink=permissive "
 			"video=DSI-1:rotate=270 fbcon=rotate:3 "
+			"systemd.show_status=true "
 			"vt.global_cursor_default=0 "
 			/* KEEP stock GPT, rootfs lives in the stock `userdata`
 			 * partition. PARTLABEL is robust vs. p-number
@@ -978,9 +979,10 @@ U_BOOT_CMD(osprep, 1, 0, do_osprep,
  * containment is wanted, move that to the stage-2 env or drop the sticky default.
  * NB: stage-2 `u-boot.bin` itself lives in the eMMC boot1 HW partition.
  */
-#define BOOTSEL_WIN_MS		20000	/* gesture window at the logo
-					 * (20 s for unhurried bench test;
-					 * dial back toward ~4 s for prod) */
+#define BOOTSEL_WIN_MS		3000	/* gesture window at the logo (prod:
+					 * 3 s — was 20 s bench value). Env
+					 * `bootsel_win_ms` overrides without
+					 * a rebuild. */
 #define BOOTSEL_HOLD_MS		1500	/* how long the mode icon shows */
 /* Bootsel logos are EMBEDDED in the binary (self-contained — no eMMC blob,
  * no partition/slot dependency). Arrays: ublogo_bmp / m2_emmc_bmp / m3_net_bmp
@@ -1046,7 +1048,7 @@ static int do_bootsel(struct cmd_tbl *cmdtp, int flag, int argc,
 {
 	struct udevice *vid;
 	struct video_priv *p;
-	ulong t0;
+	ulong t0, win_ms;
 	int n = -1;
 
 	/* No panel? degrade gracefully to the serial-only gesture path. */
@@ -1056,14 +1058,16 @@ static int do_bootsel(struct cmd_tbl *cmdtp, int flag, int argc,
 	}
 	p = dev_get_uclass_priv(vid);
 
+	win_ms = env_get_ulong("bootsel_win_ms", 10, BOOTSEL_WIN_MS);
+
 	bootsel_show(p, vid, ublogo_bmp);
 	gt9271_reset(1);			/* once: bring up @0x14 for polling */
 	gt9271_send_cfg();			/* once: stock cfg -> scanning */
-	printf("bootsel: U-Boot logo; %d ms gesture window "
-	       "(2=eMMC 3=net 4=fastboot 5=SDP)\n", BOOTSEL_WIN_MS);
+	printf("bootsel: U-Boot logo; %lu ms gesture window "
+	       "(2=eMMC 3=net 4=fastboot 5=SDP)\n", win_ms);
 
 	t0 = get_timer(0);
-	while (get_timer(t0) < BOOTSEL_WIN_MS) {
+	while (get_timer(t0) < win_ms) {
 		int c;
 
 		schedule();			/* service the i.MX WDOG —
