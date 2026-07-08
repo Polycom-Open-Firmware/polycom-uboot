@@ -17,7 +17,7 @@ binding until changed *here*. Linked from repo `CLAUDE.md` doc tree.
 > (keep the Polycom-signed stock `U-Boot 2018.03-g01365dcbff`, own its
 > rewritable env: `bootcmd=run slotbboot` → raw `mmc read`+`booti` of an
 > unsigned kernel; optionally chainload a 2nd-stage custom u-boot from
-> eMMC — HAB gates stage-1 only). This is exactly `tc8-firmware-build/
+> eMMC — HAB gates stage-1 only). This is exactly `poly-firmware-build/
 > FLASHING.md` and what the bench TC8 runs now. Everything below (F1/F2/
 > F3, the custom-u-boot build) only applies where HAB is **open** (e.g.
 > the C60) — keep for that target; for TC8, pivot to the env-vector.
