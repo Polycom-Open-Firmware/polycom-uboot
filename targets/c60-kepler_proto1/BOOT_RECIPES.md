@@ -54,7 +54,7 @@ service-console gate, not a boot failure.
 
 ## Recipe 2 — boot mainline kernel (slot A)
 
-Slot A holds an Android boot.img v0 produced by `c60-firmware-build`
+Slot A holds an Android boot.img v0 produced by `c60-firmware-build` (today: `poly-firmware-build --target=c60`)
 (`pack_boota_set.sh`): kernel in primary slot, **DTB in `second`**
 (ramdisk_size=0). Layout offsets listed are for the current build;
 recompute if kernel_size changes.

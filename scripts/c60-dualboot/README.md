@@ -65,7 +65,7 @@ tree at build step [3.0/5]):
 ## Slot A image set (flashed once via the u-boot fastboot gadget)
 
 `fastboot flash boot_a/dtbo_a/vbmeta_a/system_a` with the
-`c60-firmware-build` `out/emmc/` artifacts, DTB rebuilt with
+`c60-firmware-build` `out/emmc/` artifacts (today: `poly-firmware-build --target=c60`), DTB rebuilt with
 `&mipi_dsi { status="disabled"; }` (mainline samsung-dsim runtime-PM
 deadlocks DRM bring-up; a headless DTB is fine for hardware bring-up).
 `system_a` is the Debian 12 system image. Slot B is never touched.

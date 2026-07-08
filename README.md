@@ -59,7 +59,7 @@ run our unsigned **U-Boot 2024.04 as a chainloaded stage-2**:
   gadget (WinUSB, `1fc9:0152`) is shared with the FSL fastboot command layer.
 
 See `UNLOCK_SPEC.md` for the full TC8 spec and bench history,
-and `Polycom-Open-Firmware/c60-firmware-build` for the kernel/rootfs side.
+and `Polycom-Open-Firmware/poly-firmware-build` (`--target=c60`) for the kernel/rootfs side.
 
 ## Layout
 
