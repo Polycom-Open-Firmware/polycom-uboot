@@ -1,26 +1,27 @@
 # C60 PMIC discrepancies — u-boot vs kernel/silicon (work list)
 
-**For:** whoever brings u-boot's PMIC handling in line with the kernel.
-**Date:** 2026-07-03. **Source of truth:** live register dumps of the SAME board
-under u-boot (dark) vs mainline-Linux (display lit), plus the STOCK Polycom DTB
-extracted from eMMC `dtbo_b` (decompiled at `aibox:/root/c60-flash/c60-stock.dts`).
+This document records where u-boot's PMIC handling diverges from the kernel and
+the silicon, and the corrections required to converge them. Source of truth:
+register dumps of the same board under u-boot (display dark) vs mainline Linux
+(display lit), plus the stock Polycom DTB extracted from eMMC `dtbo_b` and
+decompiled from the stock image.
 
 ## The headline bug
 
-**The C60's PMIC is a ROHM BD71847. Everything we ship treats it as a BD71837.**
+**The C60's PMIC is a ROHM BD71847. The current firmware treats it as a BD71837.**
 
 - Stock Polycom DTB: `pmic@4b { compatible = "rohm,bd71847"; }` (+ `rohm,reset-snvs-powered`).
-- Our u-boot SPL runs the legacy `power_bd71837_init()` (37-only register map).
-- Our u-boot DTS (`imx8mm-polycom-kepler-proto1.dts`) says `Rohm BD71837` in comments; no PMIC node is actually used by the DM driver in SPL.
-- Our **mainline kernel DTS** (c60-kernel-patches 0001) inherits the EVK's `rohm,bd71837` node — also wrong; the kernel "works" by luck of SPL defaults but drives phantom registers (regulator_summary shows buck7/buck8/ldo7 that don't exist; its writes to them are dropped by silicon and faked by the regmap cache — verified live: writes to 0x07/0x08/0x1E bounce).
+- The u-boot SPL runs the legacy `power_bd71837_init()` (37-only register map).
+- The u-boot DTS (`imx8mm-polycom-kepler-proto1.dts`) says `Rohm BD71837` in comments; no PMIC node is actually used by the DM driver in SPL.
+- The **mainline kernel DTS** (`poly-kernel-patches` `patches/c60/0001…`) inherits the EVK's `rohm,bd71837` node — also wrong; the kernel "works" by luck of SPL defaults but drives phantom registers (regulator_summary shows buck7/buck8/ldo7 that don't exist; its writes to them are dropped by silicon and faked by the regmap cache — writes to 0x07/0x08/0x1E bounce).
 - Difference that matters: BD71837 = 8 bucks + 7 LDOs; **BD71847 = 6 bucks + 6 LDOs**, different voltage tables for BUCK3 (was "1st NODVS"), BUCK5, LDO5; different range bits. Stock C60 constrains: BUCK1 0.7–1.3 (boot/always-on), BUCK2 0.7–1.3 (dvs run=1.0 idle=0.9), BUCK3 0.7–1.35, BUCK4 3.0–3.3, BUCK5 1.605–1.995, BUCK6 →1.4, LDO1 1.6–1.9, LDO2 →0.9, LDO3 1.8–3.3, LDO4 0.9–1.8, LDO6 0.9–1.8 (all boot-on + always-on; **no LDO5, no LDO7 nodes**).
 
 The TC8 is NOT affected: its stock DTB is a genuine `rohm,bd71837`, and its
-chainloaded stage-2 never runs our SPL anyway (stock stage-1 owns PMIC init).
+chainloaded stage-2 never runs this SPL anyway (stock stage-1 owns PMIC init).
 The shared `power_bd71837_init()` is correct for TC8. **Only the C60 target
 needs the 47 treatment — keep the fix target-scoped.**
 
-## Measured register deltas (u-boot-after-our-SPL vs Linux-lit, chip @ i2c1 0x4b)
+## Measured register deltas (u-boot after SPL vs Linux-lit, chip @ i2c1 0x4b)
 
 True BD71847 map (kernel `rohm-bd718x7.h` common regs). "Fix" = what a
 kernel-equivalent u-boot should do.
@@ -40,7 +41,7 @@ kernel-equivalent u-boot should do.
 | 0x1C | LDO5_VOLT | 0x8F | 0x8F | equal; note 47's LDO5 uses a range bit (0x20) the 37 lacks — verify decode once, then leave |
 | 0x1D | LDO6_VOLT | 0x43 | 0x43 | equal (EN + 1.2 V-ish) |
 | 0x1E | *(37-only LDO7 — PHANTOM on 47)* | 0x00, write-bounces | 0x80 *(cache fiction)* | **Do nothing; never write** |
-| 0x24/0x25/0x27 | MVRFLTMASK2 / RCVCFG / PWRONCONFIG0 | 0x16/0x00/0x00 | 0x30/0x4C/0x16 | Investigate: not written by our SPL (PWRONCONFIG1 is 0x28). Likely kernel-driver/stock-DT config (`rohm,reset-snvs-powered` sets PWRONCONFIG). Decide per datasheet whether SPL should match; at minimum document |
+| 0x24/0x25/0x27 | MVRFLTMASK2 / RCVCFG / PWRONCONFIG0 | 0x16/0x00/0x00 | 0x30/0x4C/0x16 | Investigate: not written by the SPL (PWRONCONFIG1 is 0x28). Likely kernel-driver/stock-DT config (`rohm,reset-snvs-powered` sets PWRONCONFIG). Decide per datasheet whether SPL should match; at minimum document |
 
 ## Work items (ordered)
 
@@ -57,24 +58,27 @@ kernel-equivalent u-boot should do.
    BUCK2_VOLT_RUN=0x1E (1.0 VDD_ARM), 0x14=0x83 (DRAM), PWRONCONFIG1=0x0,
    final REGLOCK=0x1 (voltage regs left unlocked — stock BSP kernel needs this
    for BUCK2 I2C-DVS; see comment in spl.c).
+   LDO3/LDO4 being off is the prime suspect for the "panel black, backlight lit"
+   issue. Enabling them post-hoc does not light the panel, but in the current
+   board-code hack placement the panel powers up before they are enabled; the
+   SPL-time sequence here enables them earlier, so re-verify the panel once this
+   lands.
 
-2. **Remove the board-code PMIC hacks in `imx8mm_evk.c`** — they were display-
-   debug era and are now superseded/mislabeled:
+2. **Remove the superseded/mislabeled board-code PMIC hacks in `imx8mm_evk.c`:**
    - the "enable BD71837 LDO6 + LDO7 (0x1d/0x1e)" block — 0x1E is phantom; 0x1D
      already correct;
-   - the "LDO1-4 enable (0x18..0x1B)" block in `c60_display_test` — RIGHT IDEA,
-     wrong place; move into the SPL sequence (item 1) and delete here;
-   - any REGLOCK pokes at 0x2b/0x2a (bogus addresses; real REGLOCK = 0x2F).
+   - the "LDO1-4 enable (0x18..0x1B)" block in `c60_display_test` — right target,
+     wrong place; move into the SPL sequence (item 1) and delete here.
 
 3. **u-boot DTS**: fix the `Rohm BD71837` comment; if going route (b), add the
    full `rohm,bd71847` pmic node with the stock constraint set.
 
-4. **Kernel DTS (c60-kernel-patches 0001)** — the "in line with the kernel"
-   direction needs the kernel itself corrected: replace the inherited EVK
-   `rohm,bd71837` node with `rohm,bd71847` + `rohm,reset-snvs-powered` + the
-   stock constraints listed above (mainline `bd718x7` driver supports the 47).
-   Today's kernel drives phantom regulators and mislabels rails; it must be the
-   reference u-boot converges to. Sanity-check after: `regulator_summary` should
+4. **Kernel DTS (`poly-kernel-patches` `patches/c60/0001…`)** — bringing u-boot
+   "in line with the kernel" requires the kernel itself corrected: replace the
+   inherited EVK `rohm,bd71837` node with `rohm,bd71847` + `rohm,reset-snvs-powered`
+   + the stock constraints listed above (mainline `bd718x7` driver supports the
+   47). The current kernel drives phantom regulators and mislabels rails; it is
+   the reference u-boot converges to. Sanity-check after: `regulator_summary` should
    show 6 bucks/6 LDOs (no buck7/8, no ldo7) and the same measured registers.
 
 5. **Verify on bench** (tooling exists): boot u-boot, dump 0x00–0x30 via
@@ -82,25 +86,12 @@ kernel-equivalent u-boot should do.
    Linux column above — target is byte-equality on all non-phantom registers.
    Then boot Linux and re-dump to confirm nothing regressed.
 
-## Context / provenance
-
-- Everything here was established during the display bring-up hunt (see
-  session notes / `c60-uboot-backlight-hunt` memory). The LDO3/LDO4-off
-  discovery is also the current prime suspect for the still-open
-  "panel black, backlight lit" issue (enabling them post-hoc didn't light the
-  panel, but the panel powers up BEFORE they're enabled in the current hack
-  placement — the SPL-time fix in item 1 changes that ordering, so re-test the
-  panel after item 1 lands).
-- Phantom-register proof: writes to 0x07/0x08/0x1E bounce on silicon while
-  Linux debugfs shows values — regmap cache, not hardware.
-- TC8 stock DTB PMIC: `rohm,bd71837` (verified from stock TC8 kernel image DTB).
-
-## BENCH RESULT (2026-07-03) — legacy pmic_reg_write does NOT stick
+## Legacy pmic_reg_write does not stick on the BD71847
 
 Enabling LDO1-4 from SPL via the legacy `pmic_reg_write()` in `power_init_board`
-(BD71837 path) was tested: **the writes did not land** — readback of 0x18-0x1B
-stayed `0x22/0x20/0x00/0x00` (unchanged OFF), and the panel stayed dark.
-Confirms item 1 route (a) "keep legacy pmic API" is INSUFFICIENT on the 47 —
-use the DM `rohm,bd71847` driver route (b), which manages REGLOCK and the
-correct register set. So the panel-black / rail-ordering hypothesis is still
-UNTESTED (the rails were never actually enabled). Retest after route (b) lands.
+(BD71837 path) does not land: readback of 0x18-0x1B stays `0x22/0x20/0x00/0x00`
+(unchanged OFF) and the panel stays dark. Route (a) ("keep legacy pmic API") is
+therefore insufficient on the 47; route (b), the DM `rohm,bd71847` driver, which
+manages REGLOCK and the correct register set, is required. Because the rails are
+never actually enabled by route (a), the panel-black / rail-ordering effect
+stays open until route (b) is in place and verified on hardware.

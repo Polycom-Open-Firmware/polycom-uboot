@@ -54,8 +54,9 @@ service-console gate, not a boot failure.
 
 ## Recipe 2 — boot mainline kernel (slot A)
 
-Slot A holds an Android boot.img v0 produced by `c60-firmware-build` (today: `poly-firmware-build --target=c60`)
-(`pack_boota_set.sh`): kernel in primary slot, **DTB in `second`**
+Slot A holds an Android boot.img v0 produced by
+`poly-firmware-build --target=c60` (`targets/c60/boot.sh`): kernel in
+primary slot, **DTB in `second`**
 (ramdisk_size=0). Layout offsets listed are for the current build;
 recompute if kernel_size changes.
 
@@ -85,8 +86,8 @@ booti 0x40080000 - 0x46000000
 
 The kernel parses the DTB ("Hardware name: Polycom Trio C60 (Kepler
 proto1) (DT)" appears in early printk); etnaviv/mxsfb/samsung-dsim probe
-and PCIe init reaches iATU unroll. Bring-up beyond that point (audio
-card, WiFi/PCIe) is tracked separately.
+and PCIe init reaches iATU unroll. Bring-up beyond that point covers the
+audio card and WiFi/PCIe.
 
 ## Memory map for both recipes
 
@@ -146,15 +147,10 @@ board code rather than `CONFIG_PREBOOT` because the Android env header
 (`imx8mm_evk_android.h`) supplies the compiled default env and does not carry
 `CONFIG_PREBOOT` through.
 
-Status: the boot **logic is proven** — `run preboot` boots Linux reliably
-(15 s). Full **cold-boot autoboot is NOT yet validated on hardware**: the SDP
-RAM-load dev flow can't demonstrate it (the USB-boot detector forces fastboot,
-and that path appears to reload the env from eMMC, wiping `board_late_init`'s
-runtime writes). This confound does **not** exist on a production **eMMC boot**.
+`run preboot` boots Linux to the selected slot in about 15 s. The SDP
+RAM-load flow cannot exercise cold-boot autoboot (the USB-boot detector forces
+fastboot, and that path reloads the env from eMMC, wiping `board_late_init`'s
+runtime writes); this confound does not exist on a production **eMMC boot**.
 
-TODO to close:
-- Validate on the production path: flash U-Boot into the eMMC boot area and
-  cold-boot it natively (not SDP RAM-load), confirm hands-off boot to the
-  selected slot.
-- Fold live flashing (fastboot over the u-boot USB gadget) into an env-driven
-  path.
+Cold-boot autoboot requires hardware verification (the work items live in the
+workspace tracker).

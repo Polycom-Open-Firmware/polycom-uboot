@@ -15,7 +15,7 @@ mechanisms** because their BootROM lock state differs (see Goal).
 ## Goal
 
 Replace the stock Polycom u-boot so the owner has total control of the box.
-How we get there depends on the device's HAB (secure-boot) fuse state:
+The delivery mechanism depends on the device's HAB (secure-boot) fuse state:
 
 ### C60 — HAB open: replace stage-1 directly
 
@@ -31,24 +31,24 @@ How we get there depends on the device's HAB (secure-boot) fuse state:
 
 ### TC8 — HAB closed: chainload a stage-2 from eMMC boot1
 
-The bench TC8 ships **HAB-closed** (`hab_status` → "Secure boot enabled",
-SRK fuses burned), so the BootROM rejects any unsigned stage-1 — we have no
-Polycom key and cannot replace it. HAB gates **stage-1 only**, so we instead
-run our unsigned **U-Boot 2024.04 as a chainloaded stage-2**:
+The TC8 ships **HAB-closed** (`hab_status` → "Secure boot enabled",
+SRK fuses burned), so the BootROM rejects any unsigned stage-1 — there is no
+Polycom key with which to replace it. HAB gates **stage-1 only**, so the project
+runs an unsigned **U-Boot 2024.04 as a chainloaded stage-2**:
 
 - **Stage-1** = stock signed bootloader in the eMMC **`boot0`** HW partition.
   Its (CRC-only, unsigned) env `bootcmd` is rewritten to chainload us, so the
   chain auto-persists with no human in the loop.
-- **Stage-2** = our U-Boot 2024.04 living in the eMMC **`boot1`** HW
+- **Stage-2** = the project's U-Boot 2024.04 living in the eMMC **`boot1`** HW
   partition (outside the GPT, so the stock GPT and factory partitions are
   left intact). Stage-1 `mmc read`s it into RAM and `go`es to it.
 - **Boot method = unlocked NXP FSL Android `boota`.** AVB is forced
   *unlocked* (a `fastboot_get_lock_stat()→FASTBOOT_UNLOCK` overlay stub), so
   one path boots **unsigned** Android-format images: stock Android in one GPT
-  slot, our Linux in the other. Our Linux ships as an Android slot image —
+  slot, Linux in the other. The Linux image ships as an Android slot image —
   `boot.img` + `dtbo` (dtb in a DTBO container) + `vbmeta` (`--algorithm
   NONE`); rootfs goes to `userdata` (Android sparse). Switch slots with
-  `fastboot set_active`. (We do **not** repartition: the stock GPT stays.)
+  `fastboot set_active`. The stock GPT is not repartitioned.
 - **Boot UX**: a bootsel logo + a GT9271 touch-gesture window. A **4-finger
   gesture drops to fastboot** (the web provisioner's entry point); 5 fingers
   → SDP/UUU; none → normal boot. At OS handoff, `osprep` clears the panel and
@@ -58,7 +58,7 @@ run our unsigned **U-Boot 2024.04 as a chainloaded stage-2**:
   stage-2 into boot1, *flashos* flashes the slot image. The `f_fastboot` USB
   gadget (WinUSB, `1fc9:0152`) is shared with the FSL fastboot command layer.
 
-See `UNLOCK_SPEC.md` for the full TC8 spec and bench history,
+See `UNLOCK_SPEC.md` for the full TC8 spec,
 and `Polycom-Open-Firmware/poly-firmware-build` (`--target=c60`) for the kernel/rootfs side.
 
 ## Layout
@@ -66,15 +66,16 @@ and `Polycom-Open-Firmware/poly-firmware-build` (`--target=c60`) for the kernel/
 ```
 targets/
   c60-kepler_proto1/        Polycom Trio C60
-    board/                  board.c, spl.c, lpddr4_timing.c
+    board/                  lpddr4_timing.c + lpddr4_timing.h (DDR table)
     dts/                    u-boot-side DTS
-    ddr/                    extracted DDR config (or copy from upstream)
+    uboot-overlay/          files layered over vendored uboot-imx
+                            (board/freescale/imx8mm_evk board logic, defconfig,
+                            DTS, spl.c/board.c hooks)
     target.env              build vars
   tc8-chainload-uboot/      Polycom TC8 (codename proline_exec) — chainloaded stage-2
     board/                  lpddr4_timing.c (DDR shared with C60)
     uboot-overlay/          files layered over vendored uboot-imx
                             (defconfig, DTS, board hooks, fb_fsl boota fixes)
-patches/                    patches applied over upstream nxp-imx/uboot-imx
 scripts/
   build.sh                  ./scripts/build.sh <target>
   flash-via-uuu.sh          load to a board in SDP mode
@@ -89,7 +90,7 @@ out/                        per-target build artifacts (gitignored)
 ./scripts/build.sh c60-kepler_proto1
 ./scripts/build.sh tc8-chainload-uboot
 
-./scripts/flash-via-uuu.sh out/c60-kepler_proto1/imxboot-c60.bin
+./scripts/flash-via-uuu.sh out/c60-kepler_proto1/flash.bin
 ```
 
 The TC8 stage-2 artifact is `vendored/uboot-imx/u-boot.bin` (no-SPL u-boot
@@ -98,9 +99,9 @@ via SDP.
 
 ## Status
 
-- **C60**: clean board port — eMMC works, kernel handoff reaches Linux;
-  `uuu` dual-boot (custom kernel+Debian on slot A / stock on slot B) works.
-- **TC8**: chainloaded stage-2 **delivered and proven on hardware** —
-  auto-persisting chain (stock → stage-2), bootsel logo + GT9271 gesture,
-  F2 panel + F3 networking up, and the unlocked-`boota` path boots
-  Android-format slot images. Provisioning is a WebUSB/WebSerial tool.
+- **C60**: board port with working eMMC and kernel handoff to Linux;
+  `uuu` dual-boot (custom kernel+Debian on slot A / stock on slot B).
+- **TC8**: chainloaded stage-2 with an auto-persisting chain (stock →
+  stage-2), bootsel logo + GT9271 gesture, F2 panel and F3 networking, and
+  the unlocked-`boota` path for Android-format slot images. Provisioning is
+  a WebUSB/WebSerial tool.

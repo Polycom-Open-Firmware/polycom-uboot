@@ -21,8 +21,8 @@ c60-boot b        # slot B: unmodified stock images (reference)
 
 Slot A `system_a` holds a 1.8 GiB Debian 12 ext4 rootfs
 (`root=/dev/mmcblk2p5`, `init=/sbin/init`). Slot B is the untouched stock
-Android (kernel + `system_b`); its kernel currently stops in
-`imx8_register_cpufreq` (NXP-BSP ATF-SIP mismatch, tracked separately),
+Android (kernel + `system_b`); its kernel stops in
+`imx8_register_cpufreq` (NXP-BSP ATF-SIP mismatch),
 but the A/B flow is identical for both slots.
 
 ## Native boota
@@ -33,8 +33,8 @@ NXP's `boota` command performs the same steps natively (BCB slot select
 Its AVB, however, requires an RPMB-provisioned key
 (`fsl_validate_vbmeta_public_key_rpmb`) that is not present, so it
 rejects the test-key `vbmeta` even when unlocked. The `mmc read` +
-`booti` path skips AVB and is used instead. Re-signing `vbmeta` to the
-device-expected key to switch to native `boota` is a possible follow-up.
+`booti` path skips AVB and is used instead. Switching to native `boota`
+requires re-signing `vbmeta` to the device-expected key.
 
 ## u-boot build
 
@@ -65,7 +65,7 @@ tree at build step [3.0/5]):
 ## Slot A image set (flashed once via the u-boot fastboot gadget)
 
 `fastboot flash boot_a/dtbo_a/vbmeta_a/system_a` with the
-`c60-firmware-build` `out/emmc/` artifacts (today: `poly-firmware-build --target=c60`), DTB rebuilt with
+`poly-firmware-build --target=c60` `out/emmc/` artifacts, DTB rebuilt with
 `&mipi_dsi { status="disabled"; }` (mainline samsung-dsim runtime-PM
 deadlocks DRM bring-up; a headless DTB is fine for hardware bring-up).
 `system_a` is the Debian 12 system image. Slot B is never touched.
