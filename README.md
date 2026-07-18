@@ -37,7 +37,7 @@ Polycom key with which to replace it. HAB gates **stage-1 only**, so the project
 runs an unsigned **U-Boot 2024.04 as a chainloaded stage-2**:
 
 - **Stage-1** = stock signed bootloader in the eMMC **`boot0`** HW partition.
-  Its (CRC-only, unsigned) env `bootcmd` is rewritten to chainload us, so the
+  Its (CRC-only, unsigned) env `bootcmd` is rewritten to chainload stage-2, so the
   chain auto-persists with no human in the loop.
 - **Stage-2** = the project's U-Boot 2024.04 living in the eMMC **`boot1`** HW
   partition (outside the GPT, so the stock GPT and factory partitions are
@@ -96,6 +96,11 @@ out/                        per-target build artifacts (gitignored)
 The TC8 stage-2 artifact is `vendored/uboot-imx/u-boot.bin` (no-SPL u-boot
 proper); it is installed into eMMC boot1 by the WebUSB provisioner, not flashed
 via SDP.
+
+## Docs
+
+- TC8: [`UNLOCK_SPEC.md`](UNLOCK_SPEC.md) — the stage-2 spec (chainload, gesture selector, boota fixes, anti-brick); [`targets/tc8-chainload-uboot/board/README.md`](targets/tc8-chainload-uboot/board/README.md) — DDR table provenance
+- C60: [`targets/c60-kepler_proto1/BOOT_RECIPES.md`](targets/c60-kepler_proto1/BOOT_RECIPES.md) — manual boot recipes + memory map; [`scripts/c60-dualboot/README.md`](scripts/c60-dualboot/README.md) — the `c60-boot` dual-boot helper; [`targets/c60-kepler_proto1/PMIC-DISCREPANCIES.md`](targets/c60-kepler_proto1/PMIC-DISCREPANCIES.md) — BD71847 erratum
 
 ## Status
 

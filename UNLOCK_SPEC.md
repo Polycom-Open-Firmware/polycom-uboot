@@ -129,45 +129,36 @@ and the **cfg-group2** config is written (Goodix cfg reg `0x8047`). Reads at
 samples the GT9271 gesture, settles ~2 s on the max count (catches staggered
 landing), swaps to the selected mode's rotated icon, and runs the action.
 Mappings: **5 fingers → SDP/UUU** (`sdp 0`), **4 → fastboot** (`fastboot usb 0`,
-the web provisioner entry), none → normal `bootcmd`. Assets are 256² 24bpp BMPs
-rotated 90° CCW in a `bmp_blob.bin`; the board reads them via `mmc dev 0`
-(stage-2 alias mmc0 = usdhc3).
+the web provisioner entry), none → normal `bootcmd`. The mode icons are 256²
+24bpp BMPs compiled into the stage-2 binary (`.rodata`, `tc8_logos.h`) and
+displayed straight from their address — nothing is read from flash.
 
-**On-eMMC layout (pre-GPT gap):** stage-2 and the BMP blob live in the reserved
-unallocated space ahead of the flat GPT — not in `kernel_bak` (LBA 0x20000),
-which in the flat TC8 firmware (`poly-firmware-build` `FLASHING.md`; A/B
-dropped, single large rootfs) is the load-bearing rollback-kernel partition
-(`slotbboot` does `mmc read 0x40000000 0x20000 0x18000; booti` on
-`boot_slot=bak`).
-
-```
-0x0–0x2000    HAB-signed SPL/u-boot (UUU only, off-limits) · 0x2000 env (off-limits)
-              · 0x2008–0x4000 free (opt. redundant env)
-0x4000  (byte 0x800000)  stage-2 u-boot.bin → chainload:
-        mmc dev 1; mmc read 0x40200000 0x4000 0x830; dcache off; go
-0x5000  (byte 0xA00000)  BMP blob (256 KB slots
-        logo/uuu/emmc/net = 0x5000/0x5200/0x5400/0x5600; board mmc dev 0)
-0x5800–0x8000 free · 0x8000+ flat GPT (kernel first)
-```
-
-Contract: the flat-GPT first partition must stay ≥ `0x8000`; the installer must
-never allocate or reclaim `0x4000–0x8000`. Documented in `FLASHING.md`. Affects
-the board MMC_* defines, the chainload sequence, and the dd `seek=16384`/`20480`.
+**On-eMMC placement:** stage-2 lives in the eMMC **`boot1` hardware
+partition**, outside the user area; the stock A/B GPT is untouched and
+nothing of the project's sits in it. Layout authority:
+`poly-firmware-build` `FLASHING.md`. The gesture/mode icons are compiled
+into the stage-2 binary (`.rodata`) — nothing else is stored on flash.
+Field updates rewrite `boot1` through the config-blob mechanism
+(`poly-firmware-build` `CONFIG-PARTITION.md`), sha256-gated with read-back
+verify.
 
 **Auto-persist:** the stock env (byte 0x400000 / LBA 0x2000, CRC32-only, not
-HAB-signed) `bootcmd` is rewritten to chainload-only:
+HAB-signed) `bootcmd` is rewritten to chainload stage-2 from `boot1`:
 
 ```
-setenv bootcmd 'mmc dev 1\; mmc read 0x40200000 0x4000 0x830\;
+setenv bootcmd 'mmc dev 1 2\; mmc read 0x40200000 0 0x1400\; mmc dev 1 0\;
   dcache flush\; icache off\; dcache off\; go 0x40200000'
 saveenv
 ```
 
 Stock `saveenv`s the live env every boot, so the rewritten `bootcmd`
-self-perpetuates. Stage-2 then runs `bootcmd = run gesture_sel; run
-dhcp66_boot; run mmcboot` (no-gesture sets `skip_net=1` → dhcp66 skipped →
-`mmcboot` = `mmc dev 0; raw-read flat-GPT kernel@0x8000 + dtb@0x38000; booti` =
-the deterministic local OS boot). Recovery: the previous `bootcmd` is captured
+self-perpetuates. Stage-2's own forced bootcmd is
+`run gesture_sel; osprep; run dhcp66_boot; run mmcboot` — `gesture_sel`
+picks the mode (a gesture, else the last sticky selection: default eMMC
+sets `skip_net=1` so dhcp66 is skipped; a sticky netboot selection clears
+it). `mmcboot` is force-set to `boota` — the NXP Android slot boot of
+`boot_a`/`boot_b` — because the stock env defines a conflicting `mmcboot`
+(see §6). Recovery: the previous `bootcmd` is captured
 before the rewrite; `bootdelay` stays 3 so stock is re-catchable
 (`setenv bootcmd …; saveenv`); or restore via the env image at byte 0x400000;
 or BootROM SDP (BMOD strap, HAB-independent).
@@ -269,7 +260,7 @@ Stage-2 build notes (no-SPL u-boot proper, chainloaded):
 - **Stage-2 artifact = `vendored/uboot-imx/u-boot.bin`** (no-SPL u-boot proper,
   entry@0, self-relocating), not `out/.../flash.bin` — flash.bin's byte 0 is the
   imx boot-container header, so `go` faults (`esr 0x02000000`). It is staged to
-  eMMC LBA `0x4000`.
+  the eMMC `boot1` hardware partition (LBA 0).
 - **Chainload MMU teardown** — stock `go` does not tear down its MMU/caches, so
   stage-2 would run under stock page tables (no display map) and fault
   (`esr 0x96000006`); the chainload sequence issues `dcache flush; icache off;
