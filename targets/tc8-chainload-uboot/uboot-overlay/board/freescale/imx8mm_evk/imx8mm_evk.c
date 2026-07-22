@@ -1043,6 +1043,28 @@ static void bootsel_show(struct video_priv *p, struct udevice *vid,
 	video_sync(vid, true);
 }
 
+/*
+ * Strong override of the fb_fsl weak hook: the BCB bootonce-bootloader
+ * path (fastboot_run_bootmode, an init_sequence_r step) enters fastboot
+ * BEFORE bootcmd runs, so bootsel never draws and the panel would sit
+ * dark — indistinguishable from powered-off. Probe the video uclass
+ * (that is what lights the panel; same call do_bootsel makes) and show
+ * the fastboot icon, so every fastboot entry — gesture or BCB — looks
+ * the same.
+ */
+void board_fastboot_entry_show(void)
+{
+	struct udevice *vid;
+	struct video_priv *p;
+
+	if (uclass_first_device_err(UCLASS_VIDEO, &vid)) {
+		printf("fastboot: no video device — panel stays dark\n");
+		return;
+	}
+	p = dev_get_uclass_priv(vid);
+	bootsel_show(p, vid, m4_fastboot_bmp);
+}
+
 static int do_bootsel(struct cmd_tbl *cmdtp, int flag, int argc,
 		      char *const argv[])
 {

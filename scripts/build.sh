@@ -49,6 +49,31 @@ if [ -d "$OVERLAY" ]; then
 	echo "      overlay applied ($(find "$OVERLAY" -type f | wc -l) files)"
 fi
 
+# Stamp the banner with this repo's revision: the vendored NXP tree only
+# identifies itself as "2024.04"; the identity that matters on a running
+# panel is the polycom-uboot state that built it. Appended after the
+# overlay copy, so the stamp regenerates every build (last value wins).
+STAMP="$(git -C "$REPO" describe --tags --always --dirty 2>/dev/null || echo unknown)"
+echo "CONFIG_IDENT_STRING=\" openpolycom-stage2 ${STAMP}\"" >> "$UB/configs/$DEFCONFIG"
+echo "      version stamp: openpolycom-stage2 ${STAMP}"
+
+# Re-bake the boot-selector logos so the version painted into the submarine
+# artwork matches this build (the committed tc8_logos.h is the fallback when
+# the renderer isn't available). BMP side-products go to out/ so the checkout
+# stays clean; the on-logo text drops any -dirty suffix to fit the 256px art.
+LOGO_SRC="$TARGET_DIR/logos/src"
+LOGO_HDR="$UB/board/freescale/imx8mm_evk/tc8_logos.h"
+if [ -d "$LOGO_SRC" ] && [ -f "$LOGO_HDR" ]; then
+	if python3 -c "import PIL" 2>/dev/null; then
+		mkdir -p "$OUT/logos-baked"
+		python3 "$REPO/scripts/gen-logos.py" --embed \
+			"$LOGO_SRC" "$OUT/logos-baked" "$LOGO_HDR" "BOOTLOADER ${STAMP%-dirty}"
+		echo "      logos re-baked: BOOTLOADER ${STAMP%-dirty}"
+	else
+		echo "      python3-pil missing — committed tc8_logos.h (logo version stamp may be stale)"
+	fi
+fi
+
 echo "[3/5] build u-boot ($DEFCONFIG)"
 make -C "$UB" -s mrproper
 make -C "$UB" -s "$DEFCONFIG"
